@@ -4,8 +4,9 @@ use std::{io::{BufReader, BufRead}, fs::File};
 enum TokenType {
     OpeningParenthesis,
     ClosingParenthesis,
+    OpeningBracket,
+    ClosingBracket,
     Comma,
-    Assignement,
     Colon,
     EndLine,
     Value(String),
@@ -14,7 +15,6 @@ enum TokenType {
     Name(String),
     Keyword(String),
     TypeDef(String),
-    EndToken,
 }
 
 impl fmt::Debug for TokenType {
@@ -26,19 +26,19 @@ impl fmt::Debug for TokenType {
 impl fmt::Display for TokenType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         return match self {
-            Self::OpeningParenthesis => write!(f, "("),
-            Self::ClosingParenthesis => write!(f, ")"),
-            Self::EndLine => write!(f, "<\\n>"),
-            Self::Comma => write!(f, ","),
-            Self::Assignement => write!(f, "(<-)"),
-            Self::Colon => write!(f, ":"),
+            Self::OpeningParenthesis => write!(f, "<OpeningParenthesis '('>"),
+            Self::ClosingParenthesis => write!(f, "<ClosingParenthesis ')'>"),
+            Self::OpeningBracket => write!(f, "<OpeningBracket '['>"),
+            Self::ClosingBracket => write!(f, "<ClosingBracket ']'>"),
+            Self::EndLine => write!(f, "<EndLine>"),
+            Self::Comma => write!(f, "<Comma ','>"),
+            Self::Colon => write!(f, "<Colon ':'>"),
             Self::Operator(val) => write!(f, "<Operator ({})>", val),
             Self::Name(val) => write!(f, "<Name ({})>", val),
             Self::Keyword(val) => write!(f, "<Keyword ({})>", val),
             Self::TypeDef(val) => write!(f, "<TypeDef ({})>", val),
             Self::Value(val) => write!(f, "<Value ({})>", val),
             Self::QuotedValue(val) => write!(f, "<QuotedValue ('{}')>", val),
-            Self::EndToken => write!(f, "<End>"),
         };
     }
 
@@ -55,9 +55,9 @@ enum TokenizerContext {
 }
 
 static OPERATOR_STRING: &str = "+-%/-*<>=!";
-static SEPARATORS: &str = "(){}:";
+static SEPARATORS: &str = "()[]:,";
 static START_NAME_CHARACTERS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
-static NUMERIC_CHARACTERS: &str = "0123456789";
+static NUMERIC_CHARACTERS: &str = ".0123456789";
 
 fn read_lines(filename: String) -> Vec<String> {
     let file = File::open(filename);
@@ -72,8 +72,9 @@ fn read_lines(filename: String) -> Vec<String> {
 
 }
 
-static TYPES: [&str; 5] = ["int", "float", "string", "char", "function"];
+static TYPES: [&str; 4] = ["int", "float", "string", "char"];
 static OPERATORS: [&str; 13] = [">", "<", ">=", "<=", "+", "-", "<-", "/", "%", "*", "==", "!=", "!"];
+static KEYWORDS: [&str; 5] = ["end", "return", "function", "while", "for"];
 
 fn create_token(token_value: String, context: TokenizerContext) -> Result<TokenType, String> {
 
@@ -81,10 +82,8 @@ fn create_token(token_value: String, context: TokenizerContext) -> Result<TokenT
         TokenizerContext::Name => {
             if TYPES.iter().any(|&s| s == token_value) {
                 return Ok(TokenType::TypeDef(token_value));
-            } else if token_value == "return" {
+            } else if KEYWORDS.iter().any(|&s| s == token_value) {
                 return Ok(TokenType::Keyword(token_value));
-            } else if token_value == "end" {
-                return Ok(TokenType::EndToken);
             } else {
                 return Ok(TokenType::Name(token_value));
             }
@@ -103,7 +102,16 @@ fn create_token(token_value: String, context: TokenizerContext) -> Result<TokenT
             return Ok(TokenType::QuotedValue(token_value));
         },
         TokenizerContext::Separator => {
-            return Ok(TokenType::QuotedValue(token_value));
+            return match token_value.as_str() {
+                "(" => Ok(TokenType::OpeningParenthesis),
+                ")" => Ok(TokenType::ClosingParenthesis),
+                "[" => Ok(TokenType::OpeningBracket),
+                "]" => Ok(TokenType::ClosingBracket),
+                ":" => Ok(TokenType::Colon),
+                "," => Ok(TokenType::Comma),
+                _   => Err(format!("Unknown token '{}'", token_value))
+            };
+
         }
         TokenizerContext::None => {
             return Err(String::new());
@@ -152,33 +160,28 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
                                 return Err(format!("invalid character '{}' at {}:{}", c, line_index, char_index));
                             }
                         },
-                        TokenizerContext::Name => {
-                            if !START_NAME_CHARACTERS.contains(c) && !NUMERIC_CHARACTERS.contains(c) {
-                                push_context = Some(context);
-                                next_char = false;
-                            }
+                        TokenizerContext::Name if !START_NAME_CHARACTERS.contains(c) && !NUMERIC_CHARACTERS.contains(c) => {
+                            push_context = Some(context);
+                            next_char = false;
                         },
                         TokenizerContext::Separator => {
                             push_context = Some(context);
                             next_char = false;
                         },
-                        TokenizerContext::Operator => {
-                            if !OPERATOR_STRING.contains(c) {
-                                push_context = Some(context);
-                                next_char = false;
-                            }
+                        TokenizerContext::Operator if !OPERATOR_STRING.contains(c) => {
+                            push_context = Some(context);
+                            next_char = false;
                         },
-                        TokenizerContext::Value => {
-                            if !NUMERIC_CHARACTERS.contains(c) {
-                                return Err(format!("invalid characted '{}' at {}:{}", c, line_index, char_index));
-                            }
+                        TokenizerContext::Value if !NUMERIC_CHARACTERS.contains(c) => {
+                            push_context = Some(context);
+                            next_char = false;
                         },
-                        TokenizerContext::QuotedValue => {
-                            if c == '\"' {
-                                push_context = Some(context);
-                                should_push = false;
-                            }
+                        TokenizerContext::QuotedValue if c == '\"' => {
+                            push_context = Some(context);
+                            should_push = false;
                         },
+
+                        _ => (),
                     }
                 }
 

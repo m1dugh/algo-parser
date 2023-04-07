@@ -3,14 +3,25 @@ function fibo(int n): int
     v2 <- 1
     i <- 0
 
+    v3 <- 1.1
+
     if n <= 0
         return 0
+    end
 
     while i < n
         buffer <- v1
         v1 <- v2
         v2 <- buffer + v2
         e <- "hello, world"
+    end
 
     return v2
+end
+
+function test_array(int v1, int v2)
+    arr <- [v1, v2]
+
+    print(arr[0])
+
 end
