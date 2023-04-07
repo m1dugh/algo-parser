@@ -10,10 +10,11 @@ enum TokenType {
     EndLine,
     Value(String),
     QuotedValue(String),
-    Operator(char),
+    Operator(String),
     Name(String),
     Keyword(String),
     TypeDef(String),
+    EndToken,
 }
 
 impl fmt::Debug for TokenType {
@@ -31,15 +32,19 @@ impl fmt::Display for TokenType {
             Self::Comma => write!(f, ","),
             Self::Assignement => write!(f, "(<-)"),
             Self::Colon => write!(f, ":"),
-            Self::Operator(val) => write!(f, "({})", val),
-            Self::Name(val) | Self::Keyword(val) | Self::TypeDef(val) => write!(f, "<Name ({})>", val),
+            Self::Operator(val) => write!(f, "<Operator ({})>", val),
+            Self::Name(val) => write!(f, "<Name ({})>", val),
+            Self::Keyword(val) => write!(f, "<Keyword ({})>", val),
+            Self::TypeDef(val) => write!(f, "<TypeDef ({})>", val),
             Self::Value(val) => write!(f, "<Value ({})>", val),
             Self::QuotedValue(val) => write!(f, "<QuotedValue ('{}')>", val),
+            Self::EndToken => write!(f, "<End>"),
         };
     }
 
 }
 
+#[derive(Copy, Clone)]
 enum TokenizerContext {
     None,
     Name,
@@ -49,7 +54,7 @@ enum TokenizerContext {
     QuotedValue,
 }
 
-static OPERATORS: &str = "+-%/-*<>=";
+static OPERATOR_STRING: &str = "+-%/-*<>=!";
 static SEPARATORS: &str = "(){}:";
 static START_NAME_CHARACTERS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
 static NUMERIC_CHARACTERS: &str = "0123456789";
@@ -67,13 +72,44 @@ fn read_lines(filename: String) -> Vec<String> {
 
 }
 
-fn create_token(token_value: String, context: TokenizerContext) -> TokenType {
+static TYPES: [&str; 5] = ["int", "float", "string", "char", "function"];
+static OPERATORS: [&str; 13] = [">", "<", ">=", "<=", "+", "-", "<-", "/", "%", "*", "==", "!=", "!"];
 
-    if ["int", "float", "string", "char", "function"].iter().any(|&s| s == token_value) {
-        return TokenType::TypeDef(token_value);
-    } else {
-        return TokenType::Name(token_value);
-    }
+fn create_token(token_value: String, context: TokenizerContext) -> Result<TokenType, String> {
+
+    match context {
+        TokenizerContext::Name => {
+            if TYPES.iter().any(|&s| s == token_value) {
+                return Ok(TokenType::TypeDef(token_value));
+            } else if token_value == "return" {
+                return Ok(TokenType::Keyword(token_value));
+            } else if token_value == "end" {
+                return Ok(TokenType::EndToken);
+            } else {
+                return Ok(TokenType::Name(token_value));
+            }
+        },
+        TokenizerContext::Operator => {
+            if OPERATORS.iter().any(|&s| s == token_value) {
+                return Ok(TokenType::Operator(token_value));
+            } else {
+                return Err(format!("invalid operator '{}'", token_value));
+            }
+        },
+        TokenizerContext::Value => {
+            return Ok(TokenType::Value(token_value));
+        },
+        TokenizerContext::QuotedValue => {
+            return Ok(TokenType::QuotedValue(token_value));
+        },
+        TokenizerContext::Separator => {
+            return Ok(TokenType::QuotedValue(token_value));
+        }
+        TokenizerContext::None => {
+            return Err(String::new());
+        },
+    };
+
 }
 
 fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
@@ -87,6 +123,7 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
         let mut chars = l.chars().enumerate();
         if let Some((mut char_index, mut c)) = chars.next() {
             loop {
+                let mut push_context: Option<TokenizerContext> = None;
                 let mut next_char = true;
                 let mut should_push = true;
                 if c == ' ' && !matches!(context, TokenizerContext::QuotedValue) {
@@ -94,16 +131,13 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
                     match context {
                         TokenizerContext::None => (),
                         _ => {
-                            let token_value = current_token.iter().collect::<String>();
-                            result.push(create_token(token_value, context));
-                            context = TokenizerContext::None;
-                            current_token.clear();
+                            push_context = Some(context);
                         },
                     }
                 } else {
                     match context {
                         TokenizerContext::None => {
-                            if OPERATORS.contains(c) {
+                            if OPERATOR_STRING.contains(c) {
                                 context = TokenizerContext::Operator;
                             } else if SEPARATORS.contains(c) {
                                 context = TokenizerContext::Separator;
@@ -120,26 +154,17 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
                         },
                         TokenizerContext::Name => {
                             if !START_NAME_CHARACTERS.contains(c) && !NUMERIC_CHARACTERS.contains(c) {
-                                let token_value = current_token.iter().collect::<String>();
-                                result.push(create_token(token_value, context));
-                                current_token.clear();
-                                context = TokenizerContext::None;
+                                push_context = Some(context);
                                 next_char = false;
                             }
                         },
                         TokenizerContext::Separator => {
-                            let token_value = current_token.iter().collect::<String>();
-                            result.push(create_token(token_value, context));
-                            current_token.clear();
-                            context = TokenizerContext::None;
+                            push_context = Some(context);
                             next_char = false;
                         },
                         TokenizerContext::Operator => {
-                            if !OPERATORS.contains(c) {
-                                let token_value = current_token.iter().collect::<String>();
-                                result.push(create_token(token_value, context));
-                                current_token.clear();
-                                context = TokenizerContext::None;
+                            if !OPERATOR_STRING.contains(c) {
+                                push_context = Some(context);
                                 next_char = false;
                             }
                         },
@@ -150,15 +175,25 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
                         },
                         TokenizerContext::QuotedValue => {
                             if c == '\"' {
-                                let token_value = current_token.iter().collect::<String>();
-                                result.push(create_token(token_value, context));
-                                current_token.clear();
-                                context = TokenizerContext::None;
+                                push_context = Some(context);
                                 should_push = false;
                             }
                         },
                     }
                 }
+
+                match push_context {
+                    Some(val) => {
+                        let token_value = current_token.iter().collect::<String>();
+                        match create_token(token_value, val) {
+                            Ok(token) => result.push(token),
+                            Err(e) => return Err(e),
+                        };
+                        context = TokenizerContext::None;
+                        current_token.clear();
+                    },
+                    None => (),
+                };
 
                 if next_char && should_push {
                     current_token.push(c);
@@ -175,6 +210,18 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
 
             }
         }
+        match context {
+            TokenizerContext::None => (),
+            _ => {
+                let token_value = current_token.iter().collect::<String>();
+                match create_token(token_value, context) {
+                    Ok(token) => result.push(token),
+                    Err(e) => return Err(e),
+                };
+                current_token.clear();
+                context = TokenizerContext::None;
+            },
+        };
         result.push(TokenType::EndLine);
     }
     return Ok(result);
@@ -188,6 +235,6 @@ fn main() {
             println!("{}", token);
         }
     } else if let Err(e) = tokenized {
-        println!("{}", e);
+        println!("error {}", e);
     }
 }
