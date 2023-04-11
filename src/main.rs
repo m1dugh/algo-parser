@@ -1,6 +1,8 @@
 use std::fmt;
+use std::process::exit;
 use std::{io::{BufReader, BufRead}, fs::File};
 
+#[derive(Clone)]
 enum TokenType {
     OpeningParenthesis,
     ClosingParenthesis,
@@ -9,10 +11,13 @@ enum TokenType {
     Comma,
     Colon,
     EndLine,
-    Value(String),
-    QuotedValue(String),
-    Operator(String),
-    Name(String),
+    Int(i64),
+    Float(f64),
+    String(String),
+    ArrayTypeDef(String),
+    BinaryOperator(String),
+    UnaryOperator(String),
+    Variable(String),
     Keyword(String),
     TypeDef(String),
 }
@@ -33,12 +38,15 @@ impl fmt::Display for TokenType {
             Self::EndLine => write!(f, "<EndLine>"),
             Self::Comma => write!(f, "<Comma ','>"),
             Self::Colon => write!(f, "<Colon ':'>"),
-            Self::Operator(val) => write!(f, "<Operator ({})>", val),
-            Self::Name(val) => write!(f, "<Name ({})>", val),
+            Self::BinaryOperator(val) => write!(f, "<BinaryOperator ({})>", val),
+            Self::UnaryOperator(val) => write!(f, "<UnaryOperator ({})>", val),
+            Self::Variable(val) => write!(f, "<Variable ({})>", val),
             Self::Keyword(val) => write!(f, "<Keyword ({})>", val),
             Self::TypeDef(val) => write!(f, "<TypeDef ({})>", val),
-            Self::Value(val) => write!(f, "<Value ({})>", val),
-            Self::QuotedValue(val) => write!(f, "<QuotedValue ('{}')>", val),
+            Self::Int(val) => write!(f, "<Int ({})>", val),
+            Self::Float(val) => write!(f, "<Float ({})>", val),
+            Self::String(val) => write!(f, "<String ({})>", val),
+            Self::ArrayTypeDef(val) => write!(f, "<Array ({})>", val),
         };
     }
 
@@ -73,51 +81,150 @@ fn read_lines(filename: String) -> Vec<String> {
 }
 
 static TYPES: [&str; 4] = ["int", "float", "string", "char"];
-static OPERATORS: [&str; 13] = [">", "<", ">=", "<=", "+", "-", "<-", "/", "%", "*", "==", "!=", "!"];
+static BINARY_OPERATORS: [&str; 13] = [">", "<", ">=", "<=", "+", "-", "<-", "/", "%", "*", "==", "!=", "!"];
+static UNARY_OPERATORS: [&str; 2] = ["-", "+"];
 static KEYWORDS: [&str; 5] = ["end", "return", "function", "while", "for"];
 
-fn create_token(token_value: String, context: TokenizerContext) -> Result<TokenType, String> {
+
+static NUMBER_STRING: &str = "0123456789";
+
+fn to_float(token_value: &String) -> Option<f64> {
+
+    let mut upper_part: f64 = 0.0;
+    let mut lower_part: f64 = 0.0;
+    let mut chars = token_value.chars();
+
+    while let Some(c) = chars.next() {
+        if let Some(val) = c.to_digit(10) {
+            upper_part = upper_part * 10.0 + val as f64;
+        } else if c == '.' {
+            break;
+        } else {
+            return None;
+        }
+    }
+
+    for c in chars.rev() {
+        if let Some(val) = c.to_digit(10) {
+            lower_part = lower_part / 10.0 + val as f64;
+        } else {
+            return None;
+        }
+    }
+
+    lower_part /= 10.0;
+
+    return Some(upper_part + lower_part);
+}
+
+fn to_int(token_value: &String) -> Option<i64> {
+    let mut result: i64 = 0;
+    for c in token_value.chars() {
+        if let Some(val) = c.to_digit(10) {
+            result = result * 10 + val as i64;
+        } else {
+            return None;
+        }
+    }
+
+    return Some(result);
+}
+
+fn create_token(token_value: String, context: TokenizerContext, old_tokens: Vec<TokenType>) -> Result<Vec<TokenType>, String> {
+
+    let mut tokens: Vec<TokenType> = Vec::with_capacity(old_tokens.len());
+    for element in old_tokens.iter() {
+        tokens.push(element.clone());
+    }
 
     match context {
         TokenizerContext::Name => {
             if TYPES.iter().any(|&s| s == token_value) {
-                return Ok(TokenType::TypeDef(token_value));
+                tokens.push(TokenType::TypeDef(token_value));
             } else if KEYWORDS.iter().any(|&s| s == token_value) {
-                return Ok(TokenType::Keyword(token_value));
+                tokens.push(TokenType::Keyword(token_value));
+            } else if let Some(last_token) = tokens.last() {
+                tokens.push(match last_token {
+                    TokenType::Colon => TokenType::TypeDef(token_value),
+                    _ => TokenType::Variable(token_value)
+                });
             } else {
-                return Ok(TokenType::Name(token_value));
+                tokens.push(TokenType::Variable(token_value));
             }
         },
         TokenizerContext::Operator => {
-            if OPERATORS.iter().any(|&s| s == token_value) {
-                return Ok(TokenType::Operator(token_value));
+            if let Some(last_token) = tokens.last() {
+                match last_token {
+                    TokenType::BinaryOperator(_) | TokenType::UnaryOperator(_) | TokenType::Keyword(_)
+                    if UNARY_OPERATORS.iter().any(|&s| s == token_value) => {
+                        tokens.push(TokenType::UnaryOperator(token_value));
+                    },
+                    _ if BINARY_OPERATORS.iter().any(|&s| s == token_value) => {
+                        tokens.push(TokenType::BinaryOperator(token_value));
+                    },
+                    // TODO: implement proper errors
+                    _ => return Err(String::new()) 
+                };
+            } else if UNARY_OPERATORS.iter().any(|&s| s == token_value) {
+                tokens.push(TokenType::UnaryOperator(token_value));
             } else {
+                // TODO: implement proper errors
                 return Err(format!("invalid operator '{}'", token_value));
             }
         },
         TokenizerContext::Value => {
-            return Ok(TokenType::Value(token_value));
+            if let Some(val) = to_int(&token_value) {
+                tokens.push(TokenType::Int(val));
+            } else if let Some(val) = to_float(&token_value) {
+                tokens.push(TokenType::Float(val));
+            } else {
+                // TODO: implement proper errors
+                return Err(format!("invalid number '{}'", token_value));
+            }
         },
         TokenizerContext::QuotedValue => {
-            return Ok(TokenType::QuotedValue(token_value));
+            tokens.push(TokenType::String(token_value));
         },
         TokenizerContext::Separator => {
-            return match token_value.as_str() {
-                "(" => Ok(TokenType::OpeningParenthesis),
-                ")" => Ok(TokenType::ClosingParenthesis),
-                "[" => Ok(TokenType::OpeningBracket),
-                "]" => Ok(TokenType::ClosingBracket),
-                ":" => Ok(TokenType::Colon),
-                "," => Ok(TokenType::Comma),
-                _   => Err(format!("Unknown token '{}'", token_value))
+            match token_value.to_string().as_str() {
+                "(" => tokens.push(TokenType::OpeningParenthesis),
+                ")" => tokens.push(TokenType::ClosingParenthesis),
+                "[" => tokens.push(TokenType::OpeningBracket),
+                "]" => {
+
+                    let tokens_len = tokens.len();
+                    if tokens_len >= 2 {
+                        match old_tokens.get(tokens_len - 1).unwrap() {
+                            TokenType::OpeningBracket => {
+                                match old_tokens.get(tokens_len - 2).unwrap() {
+                                    TokenType::TypeDef(val) => {
+                                        tokens.pop();
+                                        tokens.pop();
+                                        tokens.push(TokenType::ArrayTypeDef(val.clone()));
+                                    },
+                                    _ => {
+                                        tokens.push(TokenType::ClosingBracket);
+                                    }
+                                }
+                            },
+                            _ => {
+                                tokens.push(TokenType::ClosingBracket);
+                            }
+                        }
+                    }
+                },
+                ":" => tokens.push(TokenType::Colon),
+                "," => tokens.push(TokenType::Comma),
+                _   => return Err(format!("invalid separator '{}'", token_value))
             };
 
         }
         TokenizerContext::None => {
-            return Err(String::new());
+            return Err(format!("invalid token '{}' in context None", token_value))
         },
     };
 
+    return Ok(tokens);
 }
 
 fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
@@ -186,10 +293,10 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
                 }
 
                 match push_context {
-                    Some(val) => {
+                    Some(_) => {
                         let token_value = current_token.iter().collect::<String>();
-                        match create_token(token_value, val) {
-                            Ok(token) => result.push(token),
+                        match create_token(token_value, context, result) {
+                            Ok(val) => result = val,
                             Err(e) => return Err(e),
                         };
                         context = TokenizerContext::None;
@@ -217,8 +324,8 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
             TokenizerContext::None => (),
             _ => {
                 let token_value = current_token.iter().collect::<String>();
-                match create_token(token_value, context) {
-                    Ok(token) => result.push(token),
+                match create_token(token_value, context, result) {
+                    Ok(val) => result = val,
                     Err(e) => return Err(e),
                 };
                 current_token.clear();
@@ -233,11 +340,15 @@ fn tokenize(filename: String) -> Result<Vec<TokenType>, String> {
 fn main() {
     let filename = "./examples/procedure.algo".to_string();
     let tokenized = tokenize(filename);
-    if let Ok(tokens) = tokenized {
-        for token in tokens {
-            println!("{}", token);
-        }
-    } else if let Err(e) = tokenized {
-        println!("error {}", e);
+    if let Err(e) = tokenized {
+        println!("{}", e);
+        exit(-1);
     }
+
+    let tokens = tokenized.unwrap();
+
+    for token in tokens {
+        println!("{}", token);
+    }
+
 }
