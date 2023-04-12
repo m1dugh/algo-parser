@@ -1,0 +1,8 @@
+if v > 3
+    v <- 2
+    v <- 3
+else if v > 5
+    v <- 5
+else
+    v <- 6
+end

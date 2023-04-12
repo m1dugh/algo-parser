@@ -31,7 +31,7 @@ fn lex(filename: String) -> Result<Vec<lexer::TokenType>, String> {
 }
 
 fn main() {
-    let filename = "./examples/test_expression.algo".to_string();
+    let filename = "./examples/test_conditions.algo".to_string();
     let tokens = match lex(filename) {
         Err(e) => {
             println!("{}", e);
@@ -44,9 +44,7 @@ fn main() {
         println!("{}", token);
     }
 
-    let mut token_iter = tokens.iter();
-
-    match parser::build_expression_ast(&mut token_iter) {
+    match parser::build_ast(&mut tokens.iter().peekable()) {
         Err(e) => panic!("{}", e),
         Ok(ast) => println!("{:?}", ast),
     }

@@ -1,4 +1,4 @@
-use std::{slice::Iter, collections::VecDeque, fmt::Debug };
+use std::{slice::Iter, collections::VecDeque, fmt::Debug, iter::Peekable };
 
 use super::lexer::TokenType;
 
@@ -78,8 +78,8 @@ pub enum Ast {
     Float(f64),
     Str(String),
     Assignement{
-        variable: Variable,
-        expression: Vec<Ast>,
+        variable: String,
+        expression: Box<Ast>,
     },
     Condition {
         condition: Box<Ast>,
@@ -116,6 +116,30 @@ pub enum Ast {
         left: Box<Ast>,
         right: Box<Ast>
     },
+    GreaterThan {
+        left: Box<Ast>,
+        right: Box<Ast>,
+    },
+    LowerThan {
+        left: Box<Ast>,
+        right: Box<Ast>,
+    },
+    GreaterOrEqual {
+        left: Box<Ast>,
+        right: Box<Ast>,
+    },
+    LowerOrEqual {
+        left: Box<Ast>,
+        right: Box<Ast>,
+    },
+    EqualTo {
+        left: Box<Ast>,
+        right: Box<Ast>,
+    },
+    NotEqualTo {
+        left: Box<Ast>,
+        right: Box<Ast>,
+    },
 }
 
 impl Debug for Ast {
@@ -131,24 +155,95 @@ impl Debug for Ast {
             Self::UnaryMinus { child } => write!(f, "(-{:?})", child),
             Self::Symbol(var) => write!(f, "Symbol({})", var),
             Self::FunctionCall { name, children } => write!(f, "<FunctionCall name={:?}, params={:?} />", name, children),
+            Self::Assignement { variable, expression } => write!(f, "<Assignement variable={:?}, expression={:?} />", variable, expression),
+            Self::EqualTo { left, right } => write!(f, "({:?} == {:?})", left, right),
+            Self::NotEqualTo { left, right } => write!(f, "({:?} != {:?})", left, right),
+            Self::GreaterThan { left, right } => write!(f, "({:?} > {:?})", left, right),
+            Self::LowerThan { left, right } => write!(f, "({:?} < {:?})", left, right),
+            Self::Condition { condition, valid_branch, invalid_branch } =>
+                write!(f, "<Condition condition={:?} then={:?} else={:?} />", condition, valid_branch, invalid_branch),
 
-            _ => todo!(),
+            _ => todo!("ast Debug::fmt not implemented"),
         };
     }
 }
 
 pub fn load_ast(tokens: &Vec<TokenType>) -> Result<Ast, String> {
 
+    let mut token_iter = tokens.iter().peekable();
+    let mut children = Vec::<Ast>::new();
+    while let Some(_) = token_iter.peek() {
+        match build_ast(&mut token_iter) {
+            Err(e) => return Err(e),
+            Ok(child) => children.push(child),
+        };
+    }
 
-    return match build_ast(&mut tokens.iter()) {
-        Err(e) => Err(e),
-        Ok(children) => Ok(Ast::Global(children))
-    };
+    return Ok(Ast::Global(children));
 }
 
-fn build_conditional_ast(tokens: &mut Iter<TokenType>) -> Result<Ast, String> {
+fn build_conditional_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
 
-    return Err(String::new());
+    let condition = Box::new(match build_expression_ast(tokens) {
+        Err(e) => return Err(e),
+        Ok(condition) => condition,
+    });
+
+    let mut has_else_statement = false;
+    let mut valid_branch_children = Vec::<Ast>::new();
+
+    loop {
+        let token = match tokens.peek() {
+            Some(token) => token,
+            None => return Err(String::from("parser: unfinished if statement")),
+        };
+
+        match token {
+            TokenType::Keyword(val) if val == "else" => {
+                tokens.next();
+                has_else_statement = true;
+                break;
+            },
+            TokenType::Keyword(val) if val == "end" => {
+                break;
+            },
+            _ => {
+                valid_branch_children.push(match build_ast(tokens) {
+                    Ok(child) => child,
+                    Err(e) => return Err(e),
+                });
+            }
+        }
+    };
+
+    let mut invalid_branch_children = Vec::<Ast>::new();
+    while has_else_statement {
+        let token = match tokens.peek() {
+            Some(token) => token,
+            None => return Err(String::from("parser: unfinished if-else statement")),
+        };
+
+        match token {
+            TokenType::Keyword(val) if val == "end" => {
+                break;
+            },
+            TokenType::EndLine => {
+                tokens.next();
+            },
+            _ => {
+                invalid_branch_children.push(match build_ast(tokens) {
+                    Ok(child) => child,
+                    Err(e) => return Err(e),
+                });
+            }
+        }
+    }
+
+    return Ok(Ast::Condition {
+        condition,
+        valid_branch: valid_branch_children,
+        invalid_branch: invalid_branch_children,
+    });
 }
 
 fn get_operator_precedency(operator: &TokenType) -> i64 {
@@ -160,6 +255,7 @@ fn get_operator_precedency(operator: &TokenType) -> i64 {
                 "+" | "-"   => 1,
                 "*" | "/"   => 3,
                 "%"         => 2,
+                "<-"        => 0,
                 _ => -1,
             }
         },
@@ -190,31 +286,32 @@ fn can_cast_type(origin_type: &Type, target_type: &Type) -> Result<Type, String>
 
 fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -> Result<(), String> {
     if output_stack.len() < 2 {
-        return Err(format!("invalid expression in create_binary_operator_ast"));
+        return Err(format!("invalid expression in create_binary_operator_ast, missing value for operator {}", operator_str));
     }
-    let el1 = Box::new(output_stack.pop().unwrap());
-    let el2 = Box::new(output_stack.pop().unwrap());
+    let el1 = output_stack.pop().unwrap();
+    let el2 = output_stack.pop().unwrap();
+    let left = Box::new(el2);
+    let right = Box::new(el1);
     output_stack.push(match operator_str {
-        "+" => Ast::Addition {
-            left: el2,
-            right: el1,
+        "+" => Ast::Addition { left, right },
+        "-" => Ast::Substraction { left, right },
+        "*" => Ast::Multiplication { left, right },
+        "/" => Ast::Division { left, right },
+        "<-" => {
+            match *left {
+                Ast::Symbol(name) => Ast::Assignement {
+                    variable: name,
+                    expression: right,
+                },
+                _ => return Err(format!("parser: can only assign value to variable")),
+            }
         },
-        "-" => Ast::Substraction {
-            left: el2,
-            right: el1,
-        },
-        "*" => Ast::Multiplication {
-            left: el2,
-            right: el1,
-        },
-        "/" => Ast::Division {
-            left: el2,
-            right: el1,
-        },
-        "%" | _ => Ast::Modulo {
-            left: el2,
-            right: el1,
-        },
+        "%" => Ast::Modulo { left, right },
+        "==" => Ast::EqualTo { left, right },
+        "!=" => Ast::NotEqualTo { left, right },
+        ">" => Ast::GreaterThan { left, right },
+        "<" => Ast::LowerThan { left, right },
+        op => return Err(format!("parser: missing implementation for operator '{}'", op)),
     });
 
     return Ok(());
@@ -263,7 +360,7 @@ fn create_unary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) ->
 
     return Ok(());
 }
-pub fn build_expression_ast(tokens: &mut Iter<TokenType>) -> Result<Ast, String> {
+pub fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
 
     let mut output_stack = Vec::<Ast>::new();
     let mut operator_stack = Vec::<TokenType>::new();
@@ -421,30 +518,19 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>) -> Result<Ast, String>
     return Ok(output_stack.pop().unwrap());
 }
 
-fn build_ast(tokens: &mut Iter<TokenType>) -> Result<Vec<Ast>, String> {
-    let mut children: Vec<Ast> = Vec::new();
-
-    for token in &tokens.next() {
-        match token {
-            TokenType::Keyword(val) if val == "if" => {
-                match build_conditional_ast(tokens) {
-                    Ok(child) => children.push(child),
-                    Err(e) => return Err(e),
-                };
-            },
-            TokenType::EndLine => {
-                break
-            },
-
-            _ => (),
-        };
-    }
-
-    return Ok(children);
+pub fn build_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+    let next_token = match tokens.peek() {
+        Some(token) => token,
+        None => return Err(String::from("missing token")),
+    };
+    match next_token {
+        TokenType::Keyword(val) if val == "if" => {
+            tokens.next();
+            return build_conditional_ast(tokens);
+        },
+        _ => return build_expression_ast(tokens),
+    };
 }
-
-
-
 
 
 trait Visitor<T> {

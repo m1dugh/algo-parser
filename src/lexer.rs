@@ -70,7 +70,7 @@ static NUMERIC_CHARACTERS: &str = ".0123456789";
 static TYPES: [&str; 4] = ["int", "float", "string", "char"];
 static BINARY_OPERATORS: [&str; 13] = [">", "<", ">=", "<=", "+", "-", "<-", "/", "%", "*", "==", "!=", "!"];
 static UNARY_OPERATORS: [&str; 2] = ["-", "+"];
-static KEYWORDS: [&str; 5] = ["end", "return", "function", "while", "for"];
+static KEYWORDS: [&str; 7] = ["end", "return", "function", "while", "for", "if", "else"];
 
 
 static NUMBER_STRING: &str = "0123456789";
