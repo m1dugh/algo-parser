@@ -1,0 +1,4 @@
+function hello(test: int): int
+    test: int <- test + test * test
+    return test
+end

@@ -9,6 +9,6 @@ end
 
 if v < 3
     if true
-        v <- 2
+        v: int <- 2
     end
 end

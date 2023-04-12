@@ -31,7 +31,7 @@ pub enum Ast {
     Str(String),
     Bool(bool),
     Assignement{
-        variable: String,
+        variable: Box<Ast>,
         expression: Box<Ast>,
     },
     Condition {
@@ -39,7 +39,10 @@ pub enum Ast {
         valid_branch: Vec<Ast>,
         invalid_branch: Vec<Ast>,
     },
-    Symbol(String),
+    Variable{
+        name: String,
+        typename: Option<String>
+    },
     Statement {
         children: Vec<Ast>
     },
@@ -117,7 +120,18 @@ impl Debug for Ast {
             Self::Division { left, right } => write!(f, "({:?} / {:?})", left, right),
             Self::UnaryPlus { child } => write!(f, "(+{:?})", child),
             Self::UnaryMinus { child } => write!(f, "(-{:?})", child),
-            Self::Symbol(var) => write!(f, "Symbol({})", var),
+            Self::Variable { name, typename } => {
+                if let Err(e) = write!(f, "<Var name={:?}", name) {
+                    return Err(e);
+                } 
+                if let Some(val) = typename {
+                    if let Err(e) = write!(f, " typename={:?}", val) {
+                        return Err(e);
+                    }
+                }
+
+                return write!(f, " />");
+            },
             Self::FunctionCall { name, children } => write!(f, "<FunctionCall name={:?}, params={:?} />", name, children),
             Self::Assignement { variable, expression } => write!(f, "<Assignement variable={:?}, expression={:?} />", variable, expression),
             Self::EqualTo { left, right } => write!(f, "({:?} == {:?})", left, right),
@@ -265,8 +279,8 @@ fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -
         "/" => Ast::Division { left, right },
         "<-" => {
             match *left {
-                Ast::Symbol(name) => Ast::Assignement {
-                    variable: name,
+                Ast::Variable { name: _, typename: _ }  => Ast::Assignement {
+                    variable: left,
                     expression: right,
                 },
                 _ => return Err(format!("parser: can only assign value to variable")),
@@ -326,13 +340,64 @@ fn create_unary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) ->
 
     return Ok(());
 }
+
+fn parse_function_header(tokens: &mut Peekable<Iter<TokenType>>) -> Result<(String, Vec<Variable>, Option<String>), String> {
+    let mut name = String::new();
+    let mut params = Vec::<Variable>::new();
+    let mut return_type = None;
+
+    return Ok((name, params, return_type));
+}
+
+fn build_function_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+
+    return Err(String::new());
+}
+
+fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+    let mut token = match tokens.next() {
+        None => return Err(String::from("missing token for variable")),
+        Some(val) => val,
+    };
+
+    let mut var_name: String;
+
+    match token {
+        TokenType::Variable(name) => var_name = name.to_string(),
+        _ => return Err(format!("parser: invalid token {} for variable declaration.", token)),
+    };
+
+    token = match tokens.peek() {
+        None => return Ok(Ast::Variable { name: var_name, typename: None }),
+        Some(token) => token,
+    };
+
+    match token {
+        TokenType::Colon => tokens.next(),
+        _ => return Ok(Ast::Variable { name: var_name, typename: None }),
+    };
+
+    token = match tokens.next() {
+        None => return Err(format!("missing type declaration for variable {}", var_name)),
+        Some(token) => token,
+    };
+
+    let mut var_type: String;
+    match token {
+        TokenType::TypeDef(name) => var_type = name.clone(),
+        _ => return Err(format!("parser: invalid type token {} for variable '{}'", token, var_name)),
+    };
+
+    return Ok(Ast::Variable { name: var_name, typename: Some(var_type) });
+}
+
 fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
 
     let mut output_stack = Vec::<Ast>::new();
     let mut operator_stack = Vec::<TokenType>::new();
 
     loop {
-        let token = match tokens.next() {
+        let token = match tokens.peek_mut() {
             Some(token) => token,
             None => {
                 return Err(format!("missing token"));
@@ -342,15 +407,24 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
         match token {
             TokenType::Bool(val) => {
                 output_stack.push(Ast::Bool(val.clone()));
+                tokens.next();
             },
             TokenType::Int(val) => {
                 output_stack.push(Ast::Int(val.clone()));
+                tokens.next();
             },
             TokenType::Float(val) => {
                 output_stack.push(Ast::Float(val.clone()));
+                tokens.next();
+            },
+            TokenType::Variable(name) if operator_stack.len() == 0 => {
+                output_stack.push(match parse_variable(tokens) {
+                    Ok(var) => var,
+                    Err(e) => return Err(e),
+                });
             },
             TokenType::Variable(name) => {
-                output_stack.push(Ast::Symbol(name.clone()));
+                output_stack.push(Ast::Variable { name: name.clone(), typename: None });
             },
             TokenType::FunctionCall(val) => {
                 operator_stack.push(token.clone());
@@ -358,6 +432,7 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
                     name: val.clone(),
                     children: Vec::new(),
                 });
+                tokens.next();
             },
             TokenType::UnaryOperator(_) | TokenType::BinaryOperator(_) => {
                 let precedency = get_operator_precedency(&token.clone());
@@ -388,6 +463,7 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
                     };
                 }
                 operator_stack.push(token.clone());
+                tokens.next();
             },
             TokenType::Comma => {
                 loop {
@@ -413,9 +489,11 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
                         }
                     }
                 }
+                tokens.next();
             },
             TokenType::OpeningParenthesis => {
                 operator_stack.push(token.clone());
+                tokens.next();
             },
             TokenType::ClosingParenthesis => {
                 loop {
@@ -449,8 +527,10 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
                         operator_stack.pop();
                     }
                 }
+                tokens.next();
             },
             TokenType::EndLine => {
+                tokens.next();
                 break;
             },
             _ => return Err(format!("invalid token {}", token)),
@@ -500,6 +580,10 @@ fn build_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Option<Result<Ast, Strin
         TokenType::Keyword(val) if val == "if" => {
             tokens.next();
             return Some(build_conditional_ast(tokens, false));
+        },
+        TokenType::Keyword(val) if val == "function" => {
+            tokens.next();
+            return Some(build_function_ast(tokens));
         },
         _ => return Some(build_expression_ast(tokens)),
     };
