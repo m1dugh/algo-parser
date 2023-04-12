@@ -8,5 +8,7 @@ else
 end
 
 if v < 3
-    v <- 2
+    if true
+        v <- 2
+    end
 end

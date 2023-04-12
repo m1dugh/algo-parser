@@ -1,64 +1,16 @@
-use std::{slice::Iter, collections::VecDeque, fmt::Debug, iter::Peekable };
+use std::{slice::Iter, fmt::Debug, iter::Peekable };
 
 use super::lexer::TokenType;
 
 #[derive(Clone)]
 pub struct Variable {
     pub name: String,
-    pub var_type: Type,
+    pub typename: String,
 }
 
 impl PartialEq<Variable> for Variable {
     fn eq(&self, other: &Variable) -> bool {
-        return self.name == other.name && self.var_type == other.var_type;
-    }
-}
-
-#[derive(Clone)]
-pub struct Type {
-    pub name: &'static str,
-    pub size: u64,
-    pub fields: Option<Vec<Variable>>,
-}
-
-const STR_TYPE: Type = Type{
-    name: "str",
-    size: 8,
-    fields: None,
-};
-
-const INT_TYPE: Type = Type{
-    name: "int",
-    size: 8,
-    fields: None,
-};
-
-const FLOAT_TYPE: Type = Type{
-    name: "float",
-    size: 8,
-    fields: None,
-};
-
-impl PartialEq<Type> for Type {
-    fn eq(&self, other: &Type) -> bool {
-        if self.name == other.name && self.size == other.size {
-            match &self.fields {
-                None => {
-                    return match other.fields {
-                        None => true,
-                        Some(_) => false,
-                    };
-                },
-                Some(fields) => {
-                    return match &other.fields {
-                        None => false,
-                        Some(other_fields) => fields == other_fields,
-                    }
-                }
-            }
-        } else {
-            return false;
-        }
+        return self.name == other.name && self.typename == other.typename;
     }
 }
 
@@ -77,6 +29,7 @@ pub enum Ast {
     Int(i64),
     Float(f64),
     Str(String),
+    Bool(bool),
     Assignement{
         variable: String,
         expression: Box<Ast>,
@@ -155,6 +108,9 @@ impl Debug for Ast {
                 return Ok(());
             },
             Self::Int(val) => write!(f, "{}", val),
+            Self::Float(val) => write!(f, "{}", val),
+            Self::Str(val) => write!(f, "{}", val),
+            Self::Bool(val) => write!(f, "{}", val),
             Self::Addition { left, right } => write!(f, "({:?} + {:?})", left, right),
             Self::Substraction { left, right } => write!(f, "({:?} - {:?})", left, right),
             Self::Multiplication { left, right } => write!(f, "({:?} * {:?})", left, right),
@@ -294,27 +250,6 @@ fn get_operator_precedency(operator: &TokenType) -> i64 {
     };
 }
 
-fn build_assignement_ast(buffer: &Vec<TokenType>, tokens: &mut Iter<TokenType>) -> Result<Ast, String> {
-
-    return Err(String::from("TODO: implement assignement ast"));
-}
-
-fn can_cast_type(origin_type: &Type, target_type: &Type) -> Result<Type, String> {
-    if origin_type == target_type {
-        return Ok(target_type.clone());
-    }
-
-    if origin_type == &INT_TYPE && (target_type == &INT_TYPE || target_type == &FLOAT_TYPE) {
-        return Ok(target_type.clone());
-    }
-
-    if origin_type == &FLOAT_TYPE && (target_type == &INT_TYPE || target_type == &FLOAT_TYPE) {
-        return Ok(origin_type.clone());
-    }
-
-    return Err(format!("cannot auto cast '{}' into '{}'", origin_type.name, target_type.name));
-}
-
 fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -> Result<(), String> {
     if output_stack.len() < 2 {
         return Err(format!("invalid expression in create_binary_operator_ast, missing value for operator {}", operator_str));
@@ -391,7 +326,7 @@ fn create_unary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) ->
 
     return Ok(());
 }
-pub fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
 
     let mut output_stack = Vec::<Ast>::new();
     let mut operator_stack = Vec::<TokenType>::new();
@@ -405,6 +340,9 @@ pub fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<As
         };
 
         match token {
+            TokenType::Bool(val) => {
+                output_stack.push(Ast::Bool(val.clone()));
+            },
             TokenType::Int(val) => {
                 output_stack.push(Ast::Int(val.clone()));
             },

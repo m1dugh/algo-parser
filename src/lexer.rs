@@ -1,4 +1,4 @@
-use std::{fmt, str::Chars};
+use std::{fmt};
 
 #[derive(Clone)]
 pub enum TokenType {
@@ -10,6 +10,7 @@ pub enum TokenType {
     Colon,
     EndLine,
     Int(i64),
+    Bool(bool),
     Float(f64),
     String(String),
     ArrayTypeDef(String),
@@ -47,6 +48,7 @@ impl fmt::Display for TokenType {
             Self::Float(val) => write!(f, "<Float ({})>", val),
             Self::String(val) => write!(f, "<String ({})>", val),
             Self::ArrayTypeDef(val) => write!(f, "<Array ({})>", val),
+            Self::Bool(val) => write!(f, "<Bool ({})>", val),
         };
     }
 
@@ -72,8 +74,6 @@ static BINARY_OPERATORS: [&str; 13] = [">", "<", ">=", "<=", "+", "-", "<-", "/"
 static UNARY_OPERATORS: [&str; 2] = ["-", "+"];
 static KEYWORDS: [&str; 7] = ["end", "return", "function", "while", "for", "if", "else"];
 
-
-static NUMBER_STRING: &str = "0123456789";
 
 fn to_float(token_value: &String) -> Option<f64> {
 
@@ -187,6 +187,10 @@ fn create_token(token_value: String, context: TokenizerContext, old_tokens: Vec<
                 tokens.push(TokenType::TypeDef(token_value));
             } else if KEYWORDS.iter().any(|&s| s == token_value) {
                 tokens.push(TokenType::Keyword(token_value));
+            } else if token_value == "true" {
+                tokens.push(TokenType::Bool(true));
+            } else if token_value == "false" {
+                tokens.push(TokenType::Bool(false));
             } else if let Some(last_token) = tokens.last() {
                 tokens.push(match last_token {
                     TokenType::Colon => TokenType::TypeDef(token_value),
