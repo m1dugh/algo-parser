@@ -5,7 +5,7 @@ use super::lexer::TokenType;
 #[derive(Clone)]
 pub struct Variable {
     pub name: String,
-    pub typename: String,
+    pub typename: Option<String>,
 }
 
 impl PartialEq<Variable> for Variable {
@@ -39,10 +39,7 @@ pub enum Ast {
         valid_branch: Vec<Ast>,
         invalid_branch: Vec<Ast>,
     },
-    Variable{
-        name: String,
-        typename: Option<String>
-    },
+    Variable(Variable),
     Statement {
         children: Vec<Ast>
     },
@@ -120,11 +117,11 @@ impl Debug for Ast {
             Self::Division { left, right } => write!(f, "({:?} / {:?})", left, right),
             Self::UnaryPlus { child } => write!(f, "(+{:?})", child),
             Self::UnaryMinus { child } => write!(f, "(-{:?})", child),
-            Self::Variable { name, typename } => {
-                if let Err(e) = write!(f, "<Var name={:?}", name) {
+            Self::Variable(var)  => {
+                if let Err(e) = write!(f, "<Var name={:?}", var.name) {
                     return Err(e);
                 } 
-                if let Some(val) = typename {
+                if let Some(val) = &var.typename {
                     if let Err(e) = write!(f, " typename={:?}", val) {
                         return Err(e);
                     }
@@ -279,7 +276,7 @@ fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -
         "/" => Ast::Division { left, right },
         "<-" => {
             match *left {
-                Ast::Variable { name: _, typename: _ }  => Ast::Assignement {
+                Ast::Variable(_)  => Ast::Assignement {
                     variable: left,
                     expression: right,
                 },
@@ -342,11 +339,80 @@ fn create_unary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) ->
 }
 
 fn parse_function_header(tokens: &mut Peekable<Iter<TokenType>>) -> Result<(String, Vec<Variable>, Option<String>), String> {
-    let mut name = String::new();
+    let name: String;
     let mut params = Vec::<Variable>::new();
-    let mut return_type = None;
+    let return_type: Option<String>;
 
-    return Ok((name, params, return_type));
+    let token = match tokens.next() {
+        Some(token) => token,
+        None => return Err(String::from("missing name for function")),
+    };
+
+    match token {
+        TokenType::Variable(func_name) => name = func_name.clone(),
+        _ => return Err(format!("invalid token {} for function name", token)),
+    };
+
+    let token = match tokens.next() {
+        Some(token) => token,
+        None => return Err(format!("parser: missing '(' after function declaration ('{}').", name)),
+    };
+
+    match token {
+        TokenType::OpeningParenthesis => (),
+        _ => return Err(format!("parser: expected '(', got {} for function '{}'", token, name)),
+    };
+
+    while let Some(token) = tokens.peek() {
+        match token {
+            TokenType::ClosingBracket => {
+                tokens.next();
+                break;
+            },
+            TokenType::Comma => {
+                tokens.next();
+            },
+            _ => {
+                params.push(match parse_variable(tokens) {
+                    Ok(val) => val,
+                    Err(e) => return Err(e),
+                });
+            },
+        }
+    }
+
+    let token = match tokens.next() {
+        None => return Err(format!("invalid function declaration for '{}'", name)),
+        Some(token) => token,
+    };
+
+    match token {
+        TokenType::EndLine => return Ok((name, params, None)),
+        TokenType::Colon => {
+            tokens.next();
+        },
+        _ => return Err(format!("parser: unexpected token {} in function '{}' declaration", token, name)),
+    };
+
+    let token = match tokens.next() {
+        None => return Err(format!("parser: unexpected end of document in function declaration '{}'", name)),
+        Some(token) => token,
+    };
+
+    return_type = Some(match token {
+        TokenType::TypeDef(return_type) => return_type.clone(),
+        _ => return Err(format!("unexpected token {} in function declaration '{}'", token, name)),
+    });
+
+    let token = match tokens.next() {
+        None => return Err(format!("parser: unexpected end of document in function declaration '{}'", name)),
+        Some(token) => token,
+    };
+
+    return match token {
+        TokenType::EndLine => Ok((name, params, return_type)),
+        _ => Err(format!("parser: expected end of line, got {} in function declaration '{}'", token, name)),
+    };
 }
 
 fn build_function_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
@@ -354,7 +420,7 @@ fn build_function_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, Str
     return Err(String::new());
 }
 
-fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Variable, String> {
     let mut token = match tokens.next() {
         None => return Err(String::from("missing token for variable")),
         Some(val) => val,
@@ -368,13 +434,13 @@ fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String>
     };
 
     token = match tokens.peek() {
-        None => return Ok(Ast::Variable { name: var_name, typename: None }),
+        None => return Ok(Variable { name: var_name, typename: None }),
         Some(token) => token,
     };
 
     match token {
         TokenType::Colon => tokens.next(),
-        _ => return Ok(Ast::Variable { name: var_name, typename: None }),
+        _ => return Ok(Variable{ name: var_name, typename: None }),
     };
 
     token = match tokens.next() {
@@ -388,7 +454,7 @@ fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String>
         _ => return Err(format!("parser: invalid type token {} for variable '{}'", token, var_name)),
     };
 
-    return Ok(Ast::Variable { name: var_name, typename: Some(var_type) });
+    return Ok(Variable { name: var_name, typename: Some(var_type) });
 }
 
 fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
@@ -417,14 +483,14 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
                 output_stack.push(Ast::Float(val.clone()));
                 tokens.next();
             },
-            TokenType::Variable(name) if operator_stack.len() == 0 => {
+            TokenType::Variable(_) if operator_stack.len() == 0 => {
                 output_stack.push(match parse_variable(tokens) {
-                    Ok(var) => var,
+                    Ok(var) => Ast::Variable(var),
                     Err(e) => return Err(e),
                 });
             },
             TokenType::Variable(name) => {
-                output_stack.push(Ast::Variable { name: name.clone(), typename: None });
+                output_stack.push(Ast::Variable(Variable { name: name.clone(), typename: None }));
             },
             TokenType::FunctionCall(val) => {
                 operator_stack.push(token.clone());
