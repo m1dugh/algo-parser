@@ -44,7 +44,7 @@ fn main() {
         println!("{}", token);
     }
 
-    match parser::build_ast(&mut tokens.iter().peekable()) {
+    match parser::load_ast(&tokens) {
         Err(e) => panic!("{}", e),
         Ok(ast) => println!("{:?}", ast),
     }

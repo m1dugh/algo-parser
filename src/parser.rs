@@ -145,7 +145,15 @@ pub enum Ast {
 impl Debug for Ast {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match self {
-            Self::Global(children) => write!(f, "<Global {:?}>", children),
+            Self::Global(children) => {
+                for tree in children {
+                    match writeln!(f, "{:?}", tree) {
+                        Ok(()) => (),
+                        Err(e) => return Err(e),
+                    };
+                }
+                return Ok(());
+            },
             Self::Int(val) => write!(f, "{}", val),
             Self::Addition { left, right } => write!(f, "({:?} + {:?})", left, right),
             Self::Substraction { left, right } => write!(f, "({:?} - {:?})", left, right),
@@ -173,16 +181,18 @@ pub fn load_ast(tokens: &Vec<TokenType>) -> Result<Ast, String> {
     let mut token_iter = tokens.iter().peekable();
     let mut children = Vec::<Ast>::new();
     while let Some(_) = token_iter.peek() {
-        match build_ast(&mut token_iter) {
-            Err(e) => return Err(e),
-            Ok(child) => children.push(child),
-        };
+        if let Some(child) = build_ast(&mut token_iter) {
+            match child {
+                Err(e) => return Err(e),
+                Ok(child) => children.push(child),
+            };
+        }
     }
 
     return Ok(Ast::Global(children));
 }
 
-fn build_conditional_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+fn build_conditional_ast(tokens: &mut Peekable<Iter<TokenType>>, nested_if: bool) -> Result<Ast, String> {
 
     let condition = Box::new(match build_expression_ast(tokens) {
         Err(e) => return Err(e),
@@ -205,13 +215,21 @@ fn build_conditional_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, 
                 break;
             },
             TokenType::Keyword(val) if val == "end" => {
+                if !nested_if {
+                    tokens.next();
+                }
                 break;
             },
             _ => {
-                valid_branch_children.push(match build_ast(tokens) {
-                    Ok(child) => child,
-                    Err(e) => return Err(e),
-                });
+                match build_ast(tokens) {
+                    None => (),
+                    Some(result) => {
+                        valid_branch_children.push(match result {
+                            Ok(child) => child,
+                            Err(e) => return Err(e),
+                        });
+                    },
+                };
             }
         }
     };
@@ -225,16 +243,29 @@ fn build_conditional_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, 
 
         match token {
             TokenType::Keyword(val) if val == "end" => {
+                if !nested_if {
+                    tokens.next();
+                }
                 break;
             },
             TokenType::EndLine => {
                 tokens.next();
             },
-            _ => {
-                invalid_branch_children.push(match build_ast(tokens) {
+            TokenType::Keyword(val) if val == "if" => {
+                tokens.next();
+                invalid_branch_children.push(match build_conditional_ast(tokens, true) {
                     Ok(child) => child,
                     Err(e) => return Err(e),
                 });
+            }
+            _ => {
+                match build_ast(tokens) {
+                    Some(result) => invalid_branch_children.push(match result {
+                        Ok(child) => child,
+                        Err(e) => return Err(e),
+                    }),
+                    None => (),
+                };
             }
         }
     }
@@ -518,17 +549,21 @@ pub fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<As
     return Ok(output_stack.pop().unwrap());
 }
 
-pub fn build_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+fn build_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Option<Result<Ast, String>> {
     let next_token = match tokens.peek() {
         Some(token) => token,
-        None => return Err(String::from("missing token")),
+        None => return Some(Err(String::from("missing token"))),
     };
     match next_token {
+        TokenType::EndLine => {
+            tokens.next();
+            return None;
+        },
         TokenType::Keyword(val) if val == "if" => {
             tokens.next();
-            return build_conditional_ast(tokens);
+            return Some(build_conditional_ast(tokens, false));
         },
-        _ => return build_expression_ast(tokens),
+        _ => return Some(build_expression_ast(tokens)),
     };
 }
 
