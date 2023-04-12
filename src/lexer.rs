@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, str::Chars};
 
 #[derive(Clone)]
 pub enum TokenType {
@@ -117,6 +117,63 @@ fn to_int(token_value: &String) -> Option<i64> {
     return Some(result);
 }
 
+fn lex_operators(token_value: String, last_token: Option<&TokenType>) -> Result<Vec<TokenType>, String> {
+    let mut op_string = token_value.clone();
+    let mut token_index = 0;
+    let mut op_string_index = op_string.len();
+    let mut result = match last_token {
+        Some(token) => vec![token.clone()],
+        None => Vec::<TokenType>::new(),
+    };
+
+    while op_string_index > 0 {
+        op_string = op_string[..op_string_index].to_string();
+        if let Some(last_token) = result.last() {
+            match last_token {
+                TokenType::BinaryOperator(_)
+                | TokenType::UnaryOperator(_)
+                | TokenType::Keyword(_)
+                | TokenType::Comma
+                    if UNARY_OPERATORS.iter().any(|&s| s == op_string) => {
+                        result.push(TokenType::UnaryOperator(op_string));
+                        token_index += op_string_index;
+                        op_string = token_value[token_index..].to_string();
+                        op_string_index = op_string.len();
+                    },
+                    _ if BINARY_OPERATORS.iter().any(|&s| s == op_string) => {
+                        result.push(TokenType::BinaryOperator(op_string));
+                        token_index += op_string_index;
+                        op_string = token_value[token_index..].to_string();
+                        op_string_index = op_string.len();
+                    },
+                    _ if op_string_index > 0 => {
+                        op_string_index -= 1;
+                    },
+                    _ => return Err(format!("invalid operator '{}'", token_value)),
+            };
+        } else if UNARY_OPERATORS.iter().any(|&s| s == op_string) {
+            result.push(TokenType::UnaryOperator(op_string[..op_string_index].to_string()));
+            token_index += op_string_index;
+            op_string = token_value[token_index..].to_string();
+            op_string_index = op_string.len();
+        } else {
+            op_string_index -= 1;
+        }
+    }
+
+    if token_value.len() == token_index {
+        return Ok(match last_token {
+            Some(_) => {
+                result.remove(0);
+                result
+            },
+            None => result,
+        });
+    } else {
+        return Err(format!("invalid operator '{}'", token_value));
+    }
+}
+
 fn create_token(token_value: String, context: TokenizerContext, old_tokens: Vec<TokenType>) -> Result<Vec<TokenType>, String> {
 
     let mut tokens: Vec<TokenType> = Vec::with_capacity(old_tokens.len());
@@ -140,24 +197,14 @@ fn create_token(token_value: String, context: TokenizerContext, old_tokens: Vec<
             }
         },
         TokenizerContext::Operator => {
-            if let Some(last_token) = tokens.last() {
-                match last_token {
-                    TokenType::BinaryOperator(_) | TokenType::UnaryOperator(_) | TokenType::Keyword(_)
-                    if UNARY_OPERATORS.iter().any(|&s| s == token_value) => {
-                        tokens.push(TokenType::UnaryOperator(token_value));
-                    },
-                    _ if BINARY_OPERATORS.iter().any(|&s| s == token_value) => {
-                        tokens.push(TokenType::BinaryOperator(token_value));
-                    },
-                    // TODO: implement proper errors
-                    _ => return Err(String::new()) 
-                };
-            } else if UNARY_OPERATORS.iter().any(|&s| s == token_value) {
-                tokens.push(TokenType::UnaryOperator(token_value));
-            } else {
-                // TODO: implement proper errors
-                return Err(format!("invalid operator '{}'", token_value));
-            }
+            match lex_operators(token_value.clone(), old_tokens.last()) {
+                Ok(operators) => {
+                    for token in operators {
+                        tokens.push(token);
+                    }
+                },
+                Err(e) => return Err(e),
+            };
         },
         TokenizerContext::Value => {
             if let Some(val) = to_int(&token_value) {

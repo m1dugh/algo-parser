@@ -130,6 +130,7 @@ impl Debug for Ast {
             Self::UnaryPlus { child } => write!(f, "(+{:?})", child),
             Self::UnaryMinus { child } => write!(f, "(-{:?})", child),
             Self::Symbol(var) => write!(f, "Symbol({})", var),
+            Self::FunctionCall { name, children } => write!(f, "<FunctionCall name={:?}, params={:?} />", name, children),
 
             _ => todo!(),
         };
@@ -187,44 +188,71 @@ fn can_cast_type(origin_type: &Type, target_type: &Type) -> Result<Type, String>
     return Err(format!("cannot auto cast '{}' into '{}'", origin_type.name, target_type.name));
 }
 
-fn create_binary_operator_ast(operator_str: &str, output_queue: &mut VecDeque<Ast>) -> Result<(), String> {
-    if output_queue.len() < 2 {
+fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -> Result<(), String> {
+    if output_stack.len() < 2 {
         return Err(format!("invalid expression in create_binary_operator_ast"));
     }
-    let el1 = Box::new(output_queue.pop_front().unwrap());
-    let el2 = Box::new(output_queue.pop_front().unwrap());
-    output_queue.push_back(match operator_str {
+    let el1 = Box::new(output_stack.pop().unwrap());
+    let el2 = Box::new(output_stack.pop().unwrap());
+    output_stack.push(match operator_str {
         "+" => Ast::Addition {
-            left: el1,
-            right: el2,
+            left: el2,
+            right: el1,
         },
         "-" => Ast::Substraction {
-            left: el1,
-            right: el2,
+            left: el2,
+            right: el1,
         },
         "*" => Ast::Multiplication {
-            left: el1,
-            right: el2,
+            left: el2,
+            right: el1,
         },
         "/" => Ast::Division {
-            left: el1,
-            right: el2,
+            left: el2,
+            right: el1,
         },
         "%" | _ => Ast::Modulo {
-            left: el1,
-            right: el2,
+            left: el2,
+            right: el1,
         },
     });
 
     return Ok(());
 }
 
-fn create_unary_operator_ast(operator_str: &str, output_queue: &mut VecDeque<Ast>) -> Result<(), String> {
-    let el1 = Box::new(match output_queue.pop_front() {
+fn create_function_ast(function_name: &str, output_stack: &mut Vec<Ast>) -> Result<(), String> {
+    let mut children = Vec::<Ast>::new();
+    loop {
+        let child = match output_stack.pop() {
+            Some(c) => c,
+            None => {
+                break;
+            },
+        };
+
+        match child {
+            Ast::FunctionCall { name: _name, children: _children } => {
+                children.reverse();
+                output_stack.push(Ast::FunctionCall {
+                    name: function_name.to_string(),
+                    children: children.clone(),
+                });
+                return Ok(());
+            },
+            val => {
+                children.push(val.clone());
+            },
+        };
+    }
+    return Err(String::from("missing function call."));
+}
+
+fn create_unary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -> Result<(), String> {
+    let el1 = Box::new(match output_stack.pop() {
         Some(o) => o,
         None => return Err(String::from("invalid expression in create_unary_operator_ast")),
     });
-    output_queue.push_back(match operator_str {
+    output_stack.push(match operator_str {
         "+" => Ast::UnaryPlus {
             child: el1,
         },
@@ -235,12 +263,10 @@ fn create_unary_operator_ast(operator_str: &str, output_queue: &mut VecDeque<Ast
 
     return Ok(());
 }
-pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option<Type>) -> Result<Ast, String> {
+pub fn build_expression_ast(tokens: &mut Iter<TokenType>) -> Result<Ast, String> {
 
-    let mut expression_type: Option<Type> = specified_type;
-
-    let mut output_queue = VecDeque::<Ast>::new();
-    let mut operator_stack = VecDeque::<TokenType>::new();
+    let mut output_stack = Vec::<Ast>::new();
+    let mut operator_stack = Vec::<TokenType>::new();
 
     loop {
         let token = match tokens.next() {
@@ -252,39 +278,17 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
 
         match token {
             TokenType::Int(val) => {
-                if let Some(ref exp_type) = expression_type {
-                    match can_cast_type(&INT_TYPE, exp_type) {
-                        Ok(result_type) => expression_type = Some(result_type),
-                        Err(e) => {
-                            return Err(e);
-                        },
-                    };
-                } else {
-                    expression_type = Some(INT_TYPE);
-                }
-
-                output_queue.push_back(Ast::Int(val.clone()));
+                output_stack.push(Ast::Int(val.clone()));
             },
             TokenType::Float(val) => {
-                if let Some(ref exp_type) = expression_type {
-                    match can_cast_type(&FLOAT_TYPE, exp_type) {
-                        Ok(result_type) => expression_type = Some(result_type),
-                        Err(e) => {
-                            return Err(e);
-                        },
-                    };
-                } else {
-                    expression_type = Some(FLOAT_TYPE);
-                }
-
-                output_queue.push_back(Ast::Float(val.clone()));
+                output_stack.push(Ast::Float(val.clone()));
             },
             TokenType::Variable(name) => {
-                output_queue.push_back(Ast::Symbol(name.clone()));
+                output_stack.push(Ast::Symbol(name.clone()));
             },
             TokenType::FunctionCall(val) => {
-                operator_stack.push_back(token.clone());
-                output_queue.push_back(Ast::FunctionCall {
+                operator_stack.push(token.clone());
+                output_stack.push(Ast::FunctionCall {
                     name: val.clone(),
                     children: Vec::new(),
                 });
@@ -292,7 +296,7 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
             TokenType::UnaryOperator(_) | TokenType::BinaryOperator(_) => {
                 let precedency = get_operator_precedency(&token.clone());
                 loop {
-                    let operator = match operator_stack.back() {
+                    let operator = match operator_stack.last() {
                         None => {
                             break
                         },
@@ -301,14 +305,14 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
 
                     match operator.clone() {
                         TokenType::BinaryOperator(val) if get_operator_precedency(&operator) >= precedency => {
-                            operator_stack.pop_back();
-                            if let Err(e) = create_binary_operator_ast(val.as_str(), &mut output_queue) {
+                            operator_stack.pop();
+                            if let Err(e) = create_binary_operator_ast(val.as_str(), &mut output_stack) {
                                 return Err(e);
                             }
                         },
-                        TokenType::UnaryOperator(val) if get_operator_precedency(&operator) >= precedency => {
-                            operator_stack.pop_back();
-                            if let Err(e) = create_unary_operator_ast(val.as_str(), &mut output_queue) {
+                        TokenType::UnaryOperator(val) if get_operator_precedency(&operator) > precedency => {
+                            operator_stack.pop();
+                            if let Err(e) = create_unary_operator_ast(val.as_str(), &mut output_stack) {
                                 return Err(e);
                             }
                         },
@@ -317,24 +321,26 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
                         },
                     };
                 }
-                operator_stack.push_back(token.clone());
+                operator_stack.push(token.clone());
             },
             TokenType::Comma => {
                 loop {
-                    let operator = match operator_stack.pop_back() {
+                    let operator = match operator_stack.last() {
                         Some(o) => o,
                         None => return Err(String::from("missing left parenthesis")),
                     };
                     match operator {
                         TokenType::BinaryOperator(val) => {
-                            if let Err(e) = create_binary_operator_ast(val.as_str(), &mut output_queue) {
+                            if let Err(e) = create_binary_operator_ast(val.as_str(), &mut output_stack) {
                                 return Err(e);
                             }
+                            operator_stack.pop();
                         },
                         TokenType::UnaryOperator(val) => {
-                            if let Err(e) = create_unary_operator_ast(val.as_str(), &mut output_queue) {
+                            if let Err(e) = create_unary_operator_ast(val.as_str(), &mut output_stack) {
                                 return Err(e);
                             }
+                            operator_stack.pop();
                         },
                         TokenType::OpeningParenthesis | _ => {
                             break;
@@ -343,23 +349,23 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
                 }
             },
             TokenType::OpeningParenthesis => {
-                operator_stack.push_back(token.clone());
+                operator_stack.push(token.clone());
             },
             TokenType::ClosingParenthesis => {
                 loop {
-                    let operator = match operator_stack.pop_back() {
+                    let operator = match operator_stack.pop() {
                         Some(o) => o,
                         None => return Err(String::from("invalid expression parsing ')' in build_expression_ast")),
                     };
 
                     match operator {
                         TokenType::UnaryOperator(val) => {
-                            if let Err(e) = create_unary_operator_ast(val.as_str(), &mut output_queue) {
+                            if let Err(e) = create_unary_operator_ast(val.as_str(), &mut output_stack) {
                                 return Err(e);
                             }
                         },
                         TokenType::BinaryOperator(val) => {
-                            if let Err(e) = create_binary_operator_ast(val.as_str(), &mut output_queue) {
+                            if let Err(e) = create_binary_operator_ast(val.as_str(), &mut output_stack) {
                                 return Err(e);
                             }
                         },
@@ -369,33 +375,12 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
                     };
                 };
 
-                if let Some(last_token) = operator_stack.back() {
+                if let Some(last_token) = operator_stack.last_mut() {
                     if let TokenType::FunctionCall(func_call) = last_token {
-                        let mut children = Vec::<Ast>::new();
-                        loop {
-                            let child = match output_queue.pop_back() {
-                                Some(c) => c,
-                                None => {
-                                    break;
-                                },
-                            };
-
-                            match child {
-                                Ast::FunctionCall {
-                                    name: _name,
-                                    children: _children
-                                } => {
-                                    output_queue.push_back(Ast::FunctionCall {
-                                        name: func_call.clone(),
-                                        children: children.clone(),
-                                    });
-                                    break;
-                                },
-                                val => {
-                                    children.push(val.clone());
-                                },
-                            };
+                        if let Err(e) = create_function_ast(func_call.as_str(), &mut output_stack) {
+                            return Err(e);
                         }
+                        operator_stack.pop();
                     }
                 }
             },
@@ -406,15 +391,20 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
         }
     }
 
-    while let Some(operator) = operator_stack.pop_back() {
+    while let Some(operator) = operator_stack.pop() {
         match operator {
             TokenType::UnaryOperator(operator_str) => {
-                if let Err(e) = create_unary_operator_ast(&operator_str, &mut output_queue) {
+                if let Err(e) = create_unary_operator_ast(&operator_str, &mut output_stack) {
                     return Err(e);
                 }
             },
             TokenType::BinaryOperator(operator_str) => {
-                if let Err(e) = create_binary_operator_ast(&operator_str, &mut output_queue) {
+                if let Err(e) = create_binary_operator_ast(&operator_str, &mut output_stack) {
+                    return Err(e);
+                }
+            },
+            TokenType::FunctionCall(func_name) => {
+                if let Err(e) = create_function_ast(&func_name, &mut output_stack) {
                     return Err(e);
                 }
             },
@@ -422,11 +412,13 @@ pub fn build_expression_ast(tokens: &mut Iter<TokenType>, specified_type: Option
         };
     }
 
-    if output_queue.len() != 1 {
-        return Err(format!("invalid expression, parsing items in build_expression_ast, expected length of 1, got {}", output_queue.len()));
+
+    if output_stack.len() != 1 {
+        println!("{:?}", output_stack);
+        return Err(format!("invalid expression, parsing items in build_expression_ast, expected length of 1, got {}", output_stack.len()));
     }
 
-    return Ok(output_queue.pop_front().unwrap());
+    return Ok(output_stack.pop().unwrap());
 }
 
 fn build_ast(tokens: &mut Iter<TokenType>) -> Result<Vec<Ast>, String> {

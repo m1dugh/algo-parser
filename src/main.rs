@@ -46,7 +46,7 @@ fn main() {
 
     let mut token_iter = tokens.iter();
 
-    match parser::build_expression_ast(&mut token_iter, None) {
+    match parser::build_expression_ast(&mut token_iter) {
         Err(e) => panic!("{}", e),
         Ok(ast) => println!("{:?}", ast),
     }
