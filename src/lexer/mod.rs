@@ -1,121 +1,14 @@
-use std::{fmt};
-
-#[derive(Clone)]
-pub enum TokenType {
-    OpeningParenthesis,
-    ClosingParenthesis,
-    OpeningBracket,
-    ClosingBracket,
-    Comma,
-    Colon,
-    EndLine,
-    Int(i64),
-    Bool(bool),
-    Float(f64),
-    String(String),
-    ArrayTypeDef(String),
-    BinaryOperator(String),
-    UnaryOperator(String),
-    Variable(String),
-    FunctionCall(String),
-    Keyword(String),
-    TypeDef(String),
-}
-
-impl fmt::Debug for TokenType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        return fmt::Display::fmt(&self, f);
-    }
-}
-
-impl fmt::Display for TokenType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        return match self {
-            Self::OpeningParenthesis => write!(f, "<OpeningParenthesis '('>"),
-            Self::ClosingParenthesis => write!(f, "<ClosingParenthesis ')'>"),
-            Self::OpeningBracket => write!(f, "<OpeningBracket '['>"),
-            Self::ClosingBracket => write!(f, "<ClosingBracket ']'>"),
-            Self::EndLine => write!(f, "<EndLine>"),
-            Self::Comma => write!(f, "<Comma ','>"),
-            Self::Colon => write!(f, "<Colon ':'>"),
-            Self::BinaryOperator(val) => write!(f, "<BinaryOperator ({})>", val),
-            Self::UnaryOperator(val) => write!(f, "<UnaryOperator ({})>", val),
-            Self::Variable(val) => write!(f, "<Variable ({})>", val),
-            Self::FunctionCall(val) => write!(f, "<FunctionCall ({})>", val),
-            Self::Keyword(val) => write!(f, "<Keyword ({})>", val),
-            Self::TypeDef(val) => write!(f, "<TypeDef ({})>", val),
-            Self::Int(val) => write!(f, "<Int ({})>", val),
-            Self::Float(val) => write!(f, "<Float ({})>", val),
-            Self::String(val) => write!(f, "<String ({})>", val),
-            Self::ArrayTypeDef(val) => write!(f, "<Array ({})>", val),
-            Self::Bool(val) => write!(f, "<Bool ({})>", val),
-        };
-    }
-
-}
-
-#[derive(Copy, Clone)]
-enum TokenizerContext {
-    None,
-    Name,
-    Operator,
-    Separator,
-    Value,
-    QuotedValue,
-}
-
-static OPERATOR_STRING: &str = "+-%/-*<>=!";
-static SEPARATORS: &str = "()[]:,";
-static START_NAME_CHARACTERS: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_";
-static NUMERIC_CHARACTERS: &str = ".0123456789";
-
-static TYPES: [&str; 4] = ["int", "float", "string", "char"];
-static BINARY_OPERATORS: [&str; 13] = [">", "<", ">=", "<=", "+", "-", "<-", "/", "%", "*", "==", "!=", "!"];
-static UNARY_OPERATORS: [&str; 2] = ["-", "+"];
-static KEYWORDS: [&str; 7] = ["end", "return", "function", "while", "for", "if", "else"];
 
 
-fn to_float(token_value: &String) -> Option<f64> {
+mod types;
+pub use types::TokenType;
+use types::TokenizerContext;
 
-    let mut upper_part: f64 = 0.0;
-    let mut lower_part: f64 = 0.0;
-    let mut chars = token_value.chars();
+mod utils;
+use utils::*;
 
-    while let Some(c) = chars.next() {
-        if let Some(val) = c.to_digit(10) {
-            upper_part = upper_part * 10.0 + val as f64;
-        } else if c == '.' {
-            break;
-        } else {
-            return None;
-        }
-    }
-
-    for c in chars.rev() {
-        if let Some(val) = c.to_digit(10) {
-            lower_part = lower_part / 10.0 + val as f64;
-        } else {
-            return None;
-        }
-    }
-
-    lower_part /= 10.0;
-
-    return Some(upper_part + lower_part);
-}
-
-fn to_int(token_value: &String) -> Option<i64> {
-    let mut result: i64 = 0;
-    for c in token_value.chars() {
-        if let Some(val) = c.to_digit(10) {
-            result = result * 10 + val as i64;
-        } else {
-            return None;
-        }
-    }
-
-    return Some(result);
-}
+mod contants;
+use contants::*;
 
 fn lex_operators(token_value: String, last_token: Option<&TokenType>) -> Result<Vec<TokenType>, String> {
     let mut op_string = token_value.clone();
@@ -131,9 +24,9 @@ fn lex_operators(token_value: String, last_token: Option<&TokenType>) -> Result<
         if let Some(last_token) = result.last() {
             match last_token {
                 TokenType::BinaryOperator(_)
-                | TokenType::UnaryOperator(_)
-                | TokenType::Keyword(_)
-                | TokenType::Comma
+                    | TokenType::UnaryOperator(_)
+                    | TokenType::Keyword(_)
+                    | TokenType::Comma
                     if UNARY_OPERATORS.iter().any(|&s| s == op_string) => {
                         result.push(TokenType::UnaryOperator(op_string));
                         token_index += op_string_index;
@@ -174,6 +67,97 @@ fn lex_operators(token_value: String, last_token: Option<&TokenType>) -> Result<
     }
 }
 
+fn lex_name_token(token_value: String, result: &mut Vec<TokenType>) {
+    if TYPES.iter().any(|&s| s == token_value) {
+        result.push(TokenType::TypeDef(token_value));
+    } else if KEYWORDS.iter().any(|&s| s == token_value) {
+        result.push(TokenType::Keyword(token_value));
+    } else if token_value == "true" {
+        result.push(TokenType::Bool(true));
+    } else if token_value == "false" {
+        result.push(TokenType::Bool(false));
+    } else if let Some(last_token) = result.last() {
+        result.push(match last_token {
+            TokenType::Colon => TokenType::TypeDef(token_value),
+            _ => TokenType::Variable(token_value)
+        });
+    } else {
+        result.push(TokenType::Variable(token_value));
+    }
+}
+
+fn lex_value_token(token_value: &String, result: &mut Vec<TokenType>) -> Result<(), String> {
+    if let Some(val) = to_int(&token_value) {
+        result.push(TokenType::Int(val));
+    } else if let Some(val) = to_float(&token_value) {
+        result.push(TokenType::Float(val));
+    } else {
+        // TODO: implement proper errors
+        return Err(format!("invalid number '{}'", token_value));
+    }
+
+    return Ok(());
+}
+
+fn lex_closing_brackets(old_tokens: &Vec<TokenType>, result: &mut Vec<TokenType>) {
+
+    let tokens_len = result.len();
+    if tokens_len >= 2 {
+        match old_tokens.get(tokens_len - 1).unwrap() {
+            TokenType::OpeningBracket => {
+                match old_tokens.get(tokens_len - 2).unwrap() {
+                    TokenType::TypeDef(val) => {
+                        result.pop();
+                        result.pop();
+                        result.push(TokenType::ArrayTypeDef(val.clone()));
+                    },
+                    _ => {
+                        result.push(TokenType::ClosingBracket);
+                    }
+                }
+            },
+            _ => {
+                result.push(TokenType::ClosingBracket);
+            }
+        }
+    }
+}
+
+fn lex_opening_parenthesis(old_tokens: &Vec<TokenType>, result: &mut Vec<TokenType>) {
+
+    if let Some(last_token) = old_tokens.last() {
+        if let TokenType::Variable(val) = last_token {
+            if let Some(before_last_token) = old_tokens.get(old_tokens.len() - 2) {
+                match before_last_token {
+                    TokenType::Keyword(val) if val == "function" => (),
+                    _ => {
+                        result.pop();
+                        result.push(TokenType::FunctionCall(val.clone()));
+                    }
+                }
+            } else {
+                result.pop();
+                result.push(TokenType::FunctionCall(val.clone()));
+            }
+        }
+    }
+    result.push(TokenType::OpeningParenthesis);
+}
+
+fn lex_separator(token_value: &String, old_tokens: &Vec<TokenType>, result: &mut Vec<TokenType>) -> Result<(), String> {
+    match token_value.to_string().as_str() {
+        "(" => lex_opening_parenthesis(&old_tokens, result),
+        ")" => result.push(TokenType::ClosingParenthesis),
+        "[" => result.push(TokenType::OpeningBracket),
+        "]" => lex_closing_brackets(&old_tokens, result),
+        ":" => result.push(TokenType::Colon),
+        "," => result.push(TokenType::Comma),
+        _   => return Err(format!("invalid separator '{}'", token_value))
+    };
+
+    return Ok(());
+}
+
 fn create_token(token_value: String, context: TokenizerContext, old_tokens: Vec<TokenType>) -> Result<Vec<TokenType>, String> {
 
     let mut tokens: Vec<TokenType> = Vec::with_capacity(old_tokens.len());
@@ -182,98 +166,27 @@ fn create_token(token_value: String, context: TokenizerContext, old_tokens: Vec<
     }
 
     match context {
-        TokenizerContext::Name => {
-            if TYPES.iter().any(|&s| s == token_value) {
-                tokens.push(TokenType::TypeDef(token_value));
-            } else if KEYWORDS.iter().any(|&s| s == token_value) {
-                tokens.push(TokenType::Keyword(token_value));
-            } else if token_value == "true" {
-                tokens.push(TokenType::Bool(true));
-            } else if token_value == "false" {
-                tokens.push(TokenType::Bool(false));
-            } else if let Some(last_token) = tokens.last() {
-                tokens.push(match last_token {
-                    TokenType::Colon => TokenType::TypeDef(token_value),
-                    _ => TokenType::Variable(token_value)
-                });
-            } else {
-                tokens.push(TokenType::Variable(token_value));
-            }
-        },
+        TokenizerContext::Name => lex_name_token(token_value, &mut tokens),
         TokenizerContext::Operator => {
             match lex_operators(token_value.clone(), old_tokens.last()) {
-                Ok(operators) => {
-                    for token in operators {
-                        tokens.push(token);
-                    }
-                },
+                Ok(operators) =>
+                    operators.iter().for_each(|token| tokens.push(token.clone())),
                 Err(e) => return Err(e),
             };
         },
         TokenizerContext::Value => {
-            if let Some(val) = to_int(&token_value) {
-                tokens.push(TokenType::Int(val));
-            } else if let Some(val) = to_float(&token_value) {
-                tokens.push(TokenType::Float(val));
-            } else {
-                // TODO: implement proper errors
-                return Err(format!("invalid number '{}'", token_value));
+            if let Err(e) = lex_value_token(&token_value, &mut tokens) {
+                return Err(e);
             }
         },
         TokenizerContext::QuotedValue => {
             tokens.push(TokenType::String(token_value));
         },
         TokenizerContext::Separator => {
-            match token_value.to_string().as_str() {
-                "(" => {
-                    if let Some(last_token) = old_tokens.last() {
-                        if let TokenType::Variable(val) = last_token {
-                            if let Some(before_last_token) = old_tokens.get(old_tokens.len() - 2) {
-                                match before_last_token {
-                                    TokenType::Keyword(val) if val == "function" => (),
-                                    _ => {
-                                        tokens.pop();
-                                        tokens.push(TokenType::FunctionCall(val.clone()));
-                                    }
-                                }
-                            } else {
-                                tokens.pop();
-                                tokens.push(TokenType::FunctionCall(val.clone()));
-                            }
-                        }
-                    }
-                    tokens.push(TokenType::OpeningParenthesis);
-                },
-                ")" => tokens.push(TokenType::ClosingParenthesis),
-                "[" => tokens.push(TokenType::OpeningBracket),
-                "]" => {
 
-                    let tokens_len = tokens.len();
-                    if tokens_len >= 2 {
-                        match old_tokens.get(tokens_len - 1).unwrap() {
-                            TokenType::OpeningBracket => {
-                                match old_tokens.get(tokens_len - 2).unwrap() {
-                                    TokenType::TypeDef(val) => {
-                                        tokens.pop();
-                                        tokens.pop();
-                                        tokens.push(TokenType::ArrayTypeDef(val.clone()));
-                                    },
-                                    _ => {
-                                        tokens.push(TokenType::ClosingBracket);
-                                    }
-                                }
-                            },
-                            _ => {
-                                tokens.push(TokenType::ClosingBracket);
-                            }
-                        }
-                    }
-                },
-                ":" => tokens.push(TokenType::Colon),
-                "," => tokens.push(TokenType::Comma),
-                _   => return Err(format!("invalid separator '{}'", token_value))
-            };
-
+            if let Err(e) = lex_separator(&token_value, &old_tokens, &mut tokens) {
+                return Err(e);
+            }
         }
         TokenizerContext::None => {
             return Err(format!("invalid token '{}' in context None", token_value))
