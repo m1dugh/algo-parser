@@ -8,6 +8,12 @@ pub struct Variable {
     pub typename: Option<String>,
 }
 
+impl Debug for Variable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}({:?})", self.name, self.typename)
+    }
+}
+
 impl PartialEq<Variable> for Variable {
     fn eq(&self, other: &Variable) -> bool {
         return self.name == other.name && self.typename == other.typename;
@@ -21,6 +27,7 @@ pub enum Ast {
         name: String,
         children: Vec<Ast>,
         parameters: Vec<Variable>,
+        return_type: Option<String>,
     },
     FunctionCall{
         name: String,
@@ -93,6 +100,7 @@ pub enum Ast {
         left: Box<Ast>,
         right: Box<Ast>,
     },
+    ReturnStatement(Option<Box<Ast>>),
 }
 
 impl Debug for Ast {
@@ -117,18 +125,7 @@ impl Debug for Ast {
             Self::Division { left, right } => write!(f, "({:?} / {:?})", left, right),
             Self::UnaryPlus { child } => write!(f, "(+{:?})", child),
             Self::UnaryMinus { child } => write!(f, "(-{:?})", child),
-            Self::Variable(var)  => {
-                if let Err(e) = write!(f, "<Var name={:?}", var.name) {
-                    return Err(e);
-                } 
-                if let Some(val) = &var.typename {
-                    if let Err(e) = write!(f, " typename={:?}", val) {
-                        return Err(e);
-                    }
-                }
-
-                return write!(f, " />");
-            },
+            Self::Variable(var)  => write!(f, "{:?}", var),
             Self::FunctionCall { name, children } => write!(f, "<FunctionCall name={:?}, params={:?} />", name, children),
             Self::Assignement { variable, expression } => write!(f, "<Assignement variable={:?}, expression={:?} />", variable, expression),
             Self::EqualTo { left, right } => write!(f, "({:?} == {:?})", left, right),
@@ -137,6 +134,9 @@ impl Debug for Ast {
             Self::LowerThan { left, right } => write!(f, "({:?} < {:?})", left, right),
             Self::Condition { condition, valid_branch, invalid_branch } =>
                 write!(f, "<Condition condition={:?} then={:?} else={:?} />", condition, valid_branch, invalid_branch),
+            Self::ReturnStatement(ast) => write!(f, "<Return {:?} />", ast),
+            Self::FunctionDeclaration { name, children, parameters, return_type } =>
+                write!(f, "<Function name={:?} parameters={:?} return_type={:?} children={:?} />", name, parameters, return_type, children),
 
             _ => todo!("ast Debug::fmt not implemented"),
         };
@@ -288,6 +288,8 @@ fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -
         "!=" => Ast::NotEqualTo { left, right },
         ">" => Ast::GreaterThan { left, right },
         "<" => Ast::LowerThan { left, right },
+        "<=" => Ast::LowerOrEqual { left, right },
+        ">=" => Ast::GreaterOrEqual { left, right },
         op => return Err(format!("parser: missing implementation for operator '{}'", op)),
     });
 
@@ -365,7 +367,7 @@ fn parse_function_header(tokens: &mut Peekable<Iter<TokenType>>) -> Result<(Stri
 
     while let Some(token) = tokens.peek() {
         match token {
-            TokenType::ClosingBracket => {
+            TokenType::ClosingParenthesis => {
                 tokens.next();
                 break;
             },
@@ -373,7 +375,7 @@ fn parse_function_header(tokens: &mut Peekable<Iter<TokenType>>) -> Result<(Stri
                 tokens.next();
             },
             _ => {
-                params.push(match parse_variable(tokens) {
+                params.push(match parse_variable(tokens, true) {
                     Ok(val) => val,
                     Err(e) => return Err(e),
                 });
@@ -381,7 +383,7 @@ fn parse_function_header(tokens: &mut Peekable<Iter<TokenType>>) -> Result<(Stri
         }
     }
 
-    let token = match tokens.next() {
+    let token = match tokens.peek() {
         None => return Err(format!("invalid function declaration for '{}'", name)),
         Some(token) => token,
     };
@@ -401,7 +403,7 @@ fn parse_function_header(tokens: &mut Peekable<Iter<TokenType>>) -> Result<(Stri
 
     return_type = Some(match token {
         TokenType::TypeDef(return_type) => return_type.clone(),
-        _ => return Err(format!("unexpected token {} in function declaration '{}'", token, name)),
+        _ => return Err(format!("unexpected token {} in function declaration '{}', expected TypeDef", token, name)),
     });
 
     let token = match tokens.next() {
@@ -415,18 +417,67 @@ fn parse_function_header(tokens: &mut Peekable<Iter<TokenType>>) -> Result<(Stri
     };
 }
 
-fn build_function_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+fn build_return_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+    match tokens.peek() {
+        None => return Ok(Ast::ReturnStatement(None)),
+        Some(_) => (),
+    };
 
-    return Err(String::new());
+    return match build_expression_ast(tokens) {
+        Err(e) => Err(e),
+        Ok(ast) => return Ok(Ast::ReturnStatement(Some(Box::new(ast)))),
+    };
 }
 
-fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Variable, String> {
+fn build_function_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+
+
+    let (name, parameters, return_type) = match parse_function_header(tokens) {
+        Ok(v) => v,
+        Err(e) => return Err(e),
+    };
+
+    let mut children = Vec::<Ast>::new();
+
+    loop {
+        let token = match tokens.peek() {
+            Some(token) => token,
+            None => return Err(format!("parser: unexpected end of document parsing function '{}'", name)),
+        };
+        match token {
+            TokenType::Keyword(val) if val == "end" => {
+                tokens.next();
+                break;
+            },
+            _ => {
+                match build_ast(tokens) {
+                    Some(ast) => {
+                        children.push(match ast {
+                            Ok(ast) => ast,
+                            Err(e) => return Err(e),
+                        });
+                    },
+                    None => (),
+                };
+            },
+        };
+    };
+
+    return Ok(Ast::FunctionDeclaration {
+        name,
+        children ,
+        parameters,
+        return_type,
+    });
+}
+
+fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>, require_type: bool) -> Result<Variable, String> {
     let mut token = match tokens.next() {
         None => return Err(String::from("missing token for variable")),
         Some(val) => val,
     };
 
-    let mut var_name: String;
+    let var_name: String;
 
     match token {
         TokenType::Variable(name) => var_name = name.to_string(),
@@ -440,7 +491,8 @@ fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Variable, St
 
     match token {
         TokenType::Colon => tokens.next(),
-        _ => return Ok(Variable{ name: var_name, typename: None }),
+        _ if !require_type => return Ok(Variable{ name: var_name, typename: None }),
+        _ => return Err(format!("missing typedef for variable '{}'", var_name)),
     };
 
     token = match tokens.next() {
@@ -484,13 +536,14 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
                 tokens.next();
             },
             TokenType::Variable(_) if operator_stack.len() == 0 => {
-                output_stack.push(match parse_variable(tokens) {
+                output_stack.push(match parse_variable(tokens, false) {
                     Ok(var) => Ast::Variable(var),
                     Err(e) => return Err(e),
                 });
             },
             TokenType::Variable(name) => {
                 output_stack.push(Ast::Variable(Variable { name: name.clone(), typename: None }));
+                tokens.next();
             },
             TokenType::FunctionCall(val) => {
                 operator_stack.push(token.clone());
@@ -650,6 +703,10 @@ fn build_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Option<Result<Ast, Strin
         TokenType::Keyword(val) if val == "function" => {
             tokens.next();
             return Some(build_function_ast(tokens));
+        },
+        TokenType::Keyword(val) if val == "return" => {
+            tokens.next();
+            return Some(build_return_ast(tokens));
         },
         _ => return Some(build_expression_ast(tokens)),
     };

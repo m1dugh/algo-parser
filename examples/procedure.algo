@@ -18,10 +18,3 @@ function fibo(n: int): int
 
     return v2
 end
-
-function test_array(v1: int, v2: int)
-    arr: int[] <- [v1, v2]
-
-    print(arr[0])
-
-end

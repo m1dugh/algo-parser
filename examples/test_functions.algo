@@ -1,4 +1,9 @@
 function hello(test: int): int
-    test: int <- test + test * test
+    test <- 3
     return test
+end
+
+function hello2(test: int)
+    function hello3()
+    end
 end
