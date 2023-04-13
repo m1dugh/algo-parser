@@ -31,7 +31,7 @@ fn lex(filename: String) -> Result<Vec<lexer::TokenType>, String> {
 }
 
 fn main() {
-    let filename = "./examples/procedure.algo".to_string();
+    let filename = "./examples/test_arrays.algo".to_string();
     let tokens = match lex(filename) {
         Err(e) => {
             println!("{}", e);

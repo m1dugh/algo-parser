@@ -1,15 +1,36 @@
 use std::fmt::Debug;
 
 #[derive(Clone)]
+pub struct Type {
+    pub name: String,
+    pub is_array: bool,
+}
+
+impl PartialEq<Type> for Type {
+    fn eq(&self, other: &Type) -> bool {
+        return self.name == other.name && self.is_array == other.is_array;
+    }
+}
+
+impl Debug for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.is_array {
+            true => write!(f, "{}[]", self.name),
+            false => write!(f, "{}", self.name),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Variable {
     pub name: String,
-    pub typename: Option<String>,
+    pub typename: Option<Type>,
 }
 
 impl Debug for Variable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         return match &self.typename {
-            Some(val) => write!(f, "{}: {}", self.name, val),
+            Some(val) => write!(f, "{}: {:?}", self.name, val),
             None => write!(f, "{}", self.name),
         };
     }
@@ -38,6 +59,7 @@ pub enum Ast {
     Float(f64),
     Str(String),
     Bool(bool),
+    ArrayValue(Vec<Ast>),
     Assignement{
         variable: Box<Ast>,
         expression: Box<Ast>,
@@ -106,6 +128,10 @@ pub enum Ast {
         right: Box<Ast>,
     },
     ReturnStatement(Option<Box<Ast>>),
+    ArrayAccess {
+        variable: String,
+        offset: u64,
+    },
 }
 
 impl Debug for Ast {
@@ -124,6 +150,8 @@ impl Debug for Ast {
             Self::Float(val) => write!(f, "{}", val),
             Self::Str(val) => write!(f, "{}", val),
             Self::Bool(val) => write!(f, "{}", val),
+            Self::ArrayValue(children) => write!(f, "{:?}", children),
+            Self::ArrayAccess { variable, offset } => write!(f, "{}[{}]", variable, offset),
             Self::Addition { left, right } => write!(f, "({:?} + {:?})", left, right),
             Self::Substraction { left, right } => write!(f, "({:?} - {:?})", left, right),
             Self::Multiplication { left, right } => write!(f, "({:?} * {:?})", left, right),

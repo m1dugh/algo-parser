@@ -1,0 +1,3 @@
+array: int[] <- [1, 4] + [1, 3]
+
+array[2] <- test

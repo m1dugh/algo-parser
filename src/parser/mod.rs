@@ -2,7 +2,7 @@ use std::{slice::Iter, iter::Peekable };
 
 use super::lexer::TokenType;
 mod types;
-pub use types::{Ast, Variable};
+pub use types::{Ast, Variable, Type};
 
 mod utils;
 use utils::get_operator_precedency;
@@ -122,7 +122,7 @@ fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -
         "*" => Ast::Multiplication { left, right },
         "/" => Ast::Division { left, right },
         "<-" => match *left {
-                Ast::Variable(_)  => Ast::Assignement { variable: left, expression: right },
+                Ast::Variable(_) | Ast::ArrayAccess { .. } => Ast::Assignement { variable: left, expression: right },
                 _ => return Err(format!("parser: can only assign value to variable")),
         },
         "%" => Ast::Modulo { left, right },
@@ -342,13 +342,61 @@ fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>, require_type: bool) ->
         Some(token) => token,
     };
 
-    let var_type: String;
+    let var_type: Type;
     match token {
-        TokenType::TypeDef(name) => var_type = name.clone(),
+        TokenType::TypeDef(name) => var_type = Type {
+            name: name.clone(),
+            is_array: false,
+        },
+        TokenType::ArrayTypeDef(name) => var_type = Type{
+            name: name.clone(),
+            is_array: true,
+        },
         _ => return Err(format!("parser: invalid type token {} for variable '{}'", token, var_name)),
     };
 
     return Ok(Variable { name: var_name, typename: Some(var_type) });
+}
+
+fn build_array_value_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+
+    let mut buffer = Vec::<TokenType>::new();
+    let mut result = Vec::<Ast>::new();
+
+    loop {
+        let token = match tokens.peek() {
+            Some(token) => token,
+            None => return Err(String::from("parser: unexpected end of document in build_array_value_ast")),
+        };
+
+        match *token {
+            TokenType::Comma => {
+                tokens.next();
+                buffer.push(TokenType::EndLine);
+                match build_expression_ast(&mut buffer.iter().peekable()) {
+                    Ok(child) => result.push(child),
+                    Err(e) => return Err(e),
+                };
+                buffer.clear();
+            },
+            TokenType::ClosingBracket => {
+                tokens.next();
+                buffer.push(TokenType::EndLine);
+                match build_expression_ast(&mut buffer.iter().peekable()) {
+                    Ok(child) => result.push(child),
+                    Err(e) => return Err(e),
+                };
+                break;
+            },
+            TokenType::EndLine => return Err(format!("parser: unexpected token {} while parsing array value.", TokenType::EndLine)),
+            val => {
+                tokens.next();
+                buffer.push(val.clone());
+            },
+        };
+    };
+    
+    return Ok(Ast::ArrayValue(result));
 }
 
 fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
@@ -497,6 +545,44 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
             TokenType::EndLine => {
                 tokens.next();
                 break;
+            },
+            TokenType::OpeningBracket => {
+                tokens.next();
+                let array_token = match build_array_value_ast(tokens) {
+                    Ok(val) => val,
+                    Err(e) => return Err(e),
+                };
+                let children = match &array_token {
+                    Ast::ArrayValue(val) => val,
+                    _ => return Err(String::new()),
+                };
+                if children.len() != 1 {
+                    output_stack.push(array_token);
+                    continue;
+                }
+                let offset = match children.get(0).unwrap() {
+                    Ast::Int(val) => *val as u64,
+                    _ => {
+                        output_stack.push(array_token);
+                        continue;
+                    },
+                };
+                let last_token = match output_stack.pop() {
+                    Some(val) => val,
+                    None => {
+                        output_stack.push(array_token);
+                        continue;
+                    },
+                };
+                let last_token_name = match last_token {
+                    Ast::Variable(var) if var.typename == None => var.name.clone(),
+                    val => {
+                        output_stack.push(val.clone());
+                        output_stack.push(array_token);
+                        continue;
+                    },
+                };
+                output_stack.push(Ast::ArrayAccess { variable: last_token_name, offset });
             },
             _ => return Err(format!("invalid token {}", token)),
         }
