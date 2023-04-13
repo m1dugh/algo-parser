@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader};
 
 pub mod lexer;
 pub mod parser;
+pub mod compiler;
 
 fn read_lines(filename: String) -> Vec<String> {
     let file = File::open(filename);

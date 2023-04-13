@@ -122,7 +122,7 @@ fn create_binary_operator_ast(operator_str: &str, output_stack: &mut Vec<Ast>) -
         "*" => Ast::Multiplication { left, right },
         "/" => Ast::Division { left, right },
         "<-" => match *left {
-                Ast::Variable(_) | Ast::ArrayAccess { .. } => Ast::Assignement { variable: left, expression: right },
+                Ast::Variable(..) | Ast::ArrayAccess { .. } => Ast::Assignement { variable: left, expression: right },
                 _ => return Err(format!("parser: can only assign value to variable")),
         },
         "%" => Ast::Modulo { left, right },
@@ -681,29 +681,4 @@ fn build_while_loop_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
     };
 
     return Ok(Ast::WhileLoop { condition, children });
-}
-
-
-trait Visitor<T> {
-    fn visit(&mut self, visited: &Ast) -> T;
-}
-
-struct ASTVisitor;
-
-impl Visitor<()> for ASTVisitor {
-    fn visit(&mut self, visited: &Ast) {
-        match visited {
-            Ast::Int(val) => println!("{}", val),
-            Ast::Statement{
-                children,
-            }=> println!("{}", children.len()),
-            _ => (),
-        };
-    }
-}
-
-pub fn test() {
-    let ast = Ast::Int(3);
-    let mut visitor = ASTVisitor{};
-    visitor.visit(&ast);
 }
