@@ -10,7 +10,10 @@ pub struct Variable {
 
 impl Debug for Variable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({:?})", self.name, self.typename)
+        return match &self.typename {
+            Some(val) => write!(f, "{}: {}", self.name, val),
+            None => write!(f, "{}", self.name),
+        };
     }
 }
 
@@ -45,6 +48,10 @@ pub enum Ast {
         condition: Box<Ast>,
         valid_branch: Vec<Ast>,
         invalid_branch: Vec<Ast>,
+    },
+    WhileLoop {
+        condition: Box<Ast>,
+        children: Vec<Ast>,
     },
     Variable(Variable),
     Statement {
@@ -132,13 +139,17 @@ impl Debug for Ast {
             Self::NotEqualTo { left, right } => write!(f, "({:?} != {:?})", left, right),
             Self::GreaterThan { left, right } => write!(f, "({:?} > {:?})", left, right),
             Self::LowerThan { left, right } => write!(f, "({:?} < {:?})", left, right),
+            Self::GreaterOrEqual { left, right } => write!(f, "({:?} >= {:?})", left, right),
+            Self::LowerOrEqual { left, right } => write!(f, "({:?} <= {:?})", left, right),
             Self::Condition { condition, valid_branch, invalid_branch } =>
                 write!(f, "<Condition condition={:?} then={:?} else={:?} />", condition, valid_branch, invalid_branch),
+            Self::WhileLoop { condition, children } =>
+                write!(f, "<While condition={:?} children={:?} />", condition, children),
             Self::ReturnStatement(ast) => write!(f, "<Return {:?} />", ast),
             Self::FunctionDeclaration { name, children, parameters, return_type } =>
                 write!(f, "<Function name={:?} parameters={:?} return_type={:?} children={:?} />", name, parameters, return_type, children),
 
-            _ => todo!("ast Debug::fmt not implemented"),
+            _ => todo!("ast fmt::Debug not implemented"),
         };
     }
 }
@@ -500,7 +511,7 @@ fn parse_variable(tokens: &mut Peekable<Iter<TokenType>>, require_type: bool) ->
         Some(token) => token,
     };
 
-    let mut var_type: String;
+    let var_type: String;
     match token {
         TokenType::TypeDef(name) => var_type = name.clone(),
         _ => return Err(format!("parser: invalid type token {} for variable '{}'", token, var_name)),
@@ -533,6 +544,10 @@ fn build_expression_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
             },
             TokenType::Float(val) => {
                 output_stack.push(Ast::Float(val.clone()));
+                tokens.next();
+            },
+            TokenType::String(val) => {
+                output_stack.push(Ast::Str(val.clone()));
                 tokens.next();
             },
             TokenType::Variable(_) if operator_stack.len() == 0 => {
@@ -704,12 +719,51 @@ fn build_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Option<Result<Ast, Strin
             tokens.next();
             return Some(build_function_ast(tokens));
         },
+        TokenType::Keyword(val) if val == "while" => {
+            tokens.next();
+            return Some(build_while_loop_ast(tokens));
+        },
         TokenType::Keyword(val) if val == "return" => {
             tokens.next();
             return Some(build_return_ast(tokens));
         },
         _ => return Some(build_expression_ast(tokens)),
     };
+}
+
+fn build_while_loop_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+    let condition = match build_expression_ast(tokens) {
+        Ok(ast) => Box::new(ast),
+        Err(e) => return Err(e),
+    };
+
+    let mut children = Vec::<Ast>::new();
+
+    loop {
+        let token = match tokens.peek() {
+            Some(token) => token,
+            None => return Err(format!("parser: error in while loop, unexpected end of document")),
+        };
+        match token {
+            TokenType::Keyword(val) if val == "end" => {
+                tokens.next();
+                break;
+            },
+            _ => {
+                match build_ast(tokens) {
+                    Some(ast) => {
+                        children.push(match ast {
+                            Ok(ast) => ast,
+                            Err(e) => return Err(e),
+                        });
+                    },
+                    None => (),
+                };
+            },
+        };
+    };
+
+    return Ok(Ast::WhileLoop { condition, children });
 }
 
 
