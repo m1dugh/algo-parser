@@ -32,7 +32,7 @@ fn lex(filename: String) -> Result<Vec<lexer::TokenType>, String> {
 }
 
 fn main() {
-    let filename = "./examples/test_arrays.algo".to_string();
+    let filename = "./examples/test_1.algo".to_string();
     let tokens = match lex(filename) {
         Err(e) => {
             println!("{}", e);
@@ -45,9 +45,10 @@ fn main() {
         println!("{}", token);
     }
 
-    match parser::load_ast(&tokens) {
+    let ast = match parser::load_ast(&tokens) {
         Err(e) => panic!("{}", e),
-        Ok(ast) => println!("{:?}", ast),
-    }
+        Ok(ast) => ast,
+    };
 
+    compiler::test(&ast);
 }
