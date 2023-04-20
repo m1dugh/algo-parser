@@ -1,9 +1,21 @@
+
+declare function print(test: str)
+
 function hello(test: int): int
     test <- 3
     return test
 end
 
+declare function hello4(): int
+
 function hello2(test: int)
-    function hello3()
+    hello4()
+    function hello3(): int
     end
+    test <- test + hello3()
 end
+
+function hello4(): int
+end
+
+v1 <- 3 + 2
