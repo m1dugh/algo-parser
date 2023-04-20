@@ -77,7 +77,33 @@ struct FunctionDeclaration {
 
 struct Function {
     name: String,
+    variables: Vec<Variable>,
     statements: Vec<parser::Ast>,
+}
+
+impl Function {
+    fn new(name: String, statements: Vec<parser::Ast>) -> Self {
+        return Function {
+            name,
+            variables: Vec::new(),
+            statements,
+        };
+    }
+
+    fn new_empty(name: String) -> Self {
+        return Function::new(name, Vec::new());
+    }
+
+
+    fn stack_size(&self) -> u64 {
+        return self
+            .variables
+            .iter()
+            .map(|v| v.typeval.size)
+            .reduce(|v1, v2| v1 + v2)
+            .unwrap_or(0);
+    }
+
 }
 
 impl ToString for FunctionDeclaration {
@@ -93,10 +119,6 @@ impl ToString for FunctionDeclaration {
             }
         }
         res.push(')');
-        res.push_str(format!(": {}", match &self.return_type {
-            Some(val) => val.name.clone(),
-            None => String::from("void"),
-        }).as_str());
         return res;
     }
 }
@@ -144,14 +166,6 @@ impl Scope {
             functions_symbol_table: HashMap::<FunctionDeclaration, String>::new(),
         };
     }
-}
-
-fn get_variable_type(name: &str, scope: &Scope) -> Result<Type, String> {
-
-    return match scope.variables.iter().filter(|&v| v.name == name).next() {
-        Some(val) => Ok(val.typeval.clone()),
-        None => Err(format!("compiler: undefined variable '{}'", name)),
-    };
 }
 
 fn function_exists(name: &str, param_types: &Vec<Type>, scope: &Scope) -> Option<FunctionDeclaration> {
@@ -291,7 +305,24 @@ fn get_function_effective_name(declaration: &FunctionDeclaration, scope: &Scope)
     }
 }
 
-fn flatten_tree(children: &Vec<parser::Ast>, scope: Scope, scope_name: String, func_impl: &mut Vec<parser::Ast>, extern_symbols: &mut Vec<FunctionDeclaration>) -> Result<Vec<Function>, String> {
+fn get_variable_type(name: &String, scope: &Scope) -> Result<Type, String> {
+    if let Some(var) = scope.variables.iter().filter(|&v| &v.name == name).next() {
+        return Ok(var.typeval.clone());
+    } else if let Some(parent_scope) = &scope.parent {
+        return get_variable_type(name, &parent_scope);
+    } else {
+        return Err(format!("unknown variable '{}'", name));
+    }
+}
+
+fn get_local_variable_type(name: &String, scope: &Scope) -> Option<Type> {
+    return match scope.variables.iter().filter(|v| &v.name == name).next() {
+        Some(var) => Some(var.typeval.clone()),
+        None => None,
+    };
+}
+
+fn flatten_tree(children: &Vec<parser::Ast>, scope: Scope, scope_name: String, func_impl: &mut Function, extern_symbols: &mut Vec<FunctionDeclaration>) -> Result<Vec<Function>, String> {
     let mut children_functions = Vec::<Function>::new();
     let mut scope = scope;
     for child in children {
@@ -340,13 +371,15 @@ fn flatten_tree(children: &Vec<parser::Ast>, scope: Scope, scope_name: String, f
                 scope.functions_symbol_table.remove(&dec);
                 scope.functions_symbol_table.insert(dec.clone(), function_name.clone());
 
+                let mut sub_function = Function::new_empty(function_name);
+
                 let sub_scope = Scope::new(Some(Box::new(scope.clone())));
                 let mut statements = Vec::<parser::Ast>::new();
                 let sub_functions = match flatten_tree(
                     children,
                     sub_scope, 
                     format!("{}_{}", scope_name.clone(), name.clone()),
-                    &mut statements,
+                    &mut sub_function,
                     extern_symbols,
                 ) {
                     Err(e) => return Err(e),
@@ -355,10 +388,7 @@ fn flatten_tree(children: &Vec<parser::Ast>, scope: Scope, scope_name: String, f
                 for f in sub_functions {
                     children_functions.push(f);
                 }
-                children_functions.push(Function {
-                    name: function_name.clone(),
-                    statements,
-                });
+                children_functions.push(sub_function);
             },
             parser::Ast::FunctionHeader { name, parameters, return_type }
             if match scope.parent {None => true, _ => false,} => {
@@ -407,13 +437,38 @@ fn flatten_tree(children: &Vec<parser::Ast>, scope: Scope, scope_name: String, f
                     Ok(val) => val,
                 };
 
-                func_impl.push(parser::Ast::FunctionCall { 
+                func_impl.statements.push(parser::Ast::FunctionCall { 
                     name: effective_name.clone(),
                     children: children.clone(), 
                 });
             },
             parser::Ast::FunctionHeader {..} => return Err(format!("cannot create nested function declarations")),
-            child => func_impl.push(child.clone()),
+            parser::Ast::Assignement { variable, expression } => {
+                let var = match &**variable {
+                    parser::Ast::Variable(var) => var,
+                    _ => return Err(String::from("can only assign value to a variable.")),
+                };
+
+                let expression_type = match calculate_expression_type(&expression, &scope) {
+                    Ok(t) => t,
+                    Err(e) => return Err(e),
+                };
+
+                match get_variable_type(&var.name, &scope) {
+                    Ok(t) if t != expression_type
+                        => return Err(format!("mismatching type for variable '{}', expected {}, got {}", &var.name, t, expression_type)),
+                    Err(..) =>  {
+                        let new_var = Variable { name: var.name.clone(), typeval: expression_type };
+                        scope.variables.push(new_var.clone());
+                        func_impl.variables.push(new_var);
+                    },
+                    _ => (),
+                };
+
+
+                func_impl.statements.push(child.clone());
+            },
+            child => func_impl.statements.push(child.clone()),
         }
 
     }
@@ -425,10 +480,72 @@ fn flatten_tree(children: &Vec<parser::Ast>, scope: Scope, scope_name: String, f
     return Ok(children_functions);
 }
 
+fn build_compiler_context(children: &Vec<parser::Ast>) -> CompilerContext {
+    let mut main_function = Function::new_empty(String::from("main"));
+
+    let mut extern_symbols = Vec::<FunctionDeclaration>::new();
+
+    let functions = match flatten_tree(&children, Scope::new_global_scope(), String::new(), &mut main_function, &mut extern_symbols) {
+        Err(e) => panic!("{}", e),
+        Ok(f) => f,
+    };
+
+    return CompilerContext {
+        functions,
+        main_function,
+        extern_symbols,
+    };
+}
+
 struct CompilerContext {
     functions: Vec<Function>,
-    main_function: Vec<Function>,
-    extern_symbols: Vec<String>,
+    main_function: Function,
+    extern_symbols: Vec<FunctionDeclaration>,
+}
+
+fn generate_variable_addresses(variables: &Vec<Variable>, stack_size: u64) -> Result<HashMap<String, u64>, String> {
+    let mut res = HashMap::new();
+
+    let mut current_offset = 0;
+
+    for var in variables {
+        current_offset += var.typeval.size;
+        res.insert(var.name.clone(), current_offset);
+    }
+
+    if current_offset == stack_size {
+        return Ok(res);
+    } else {
+        return Err(format!("mismatched stack size, expected {}, got {}", stack_size, current_offset));
+    }
+
+}
+
+fn visit_function(func: &Function) -> Result<String, String> {
+    let mut res = String::new();
+    let stack_size = func.stack_size();
+
+    let addresses = match generate_variable_addresses(&func.variables, stack_size) {
+        Err(e) => return Err(e),
+        Ok(v) => v,
+    };
+    println!("{:?}", addresses);
+
+    res.push_str(format!("{}:\n", func.name).as_str());
+    res.push_str("\tpush rbp\n");
+    if stack_size > 0 {
+        res.push_str("\tmov rbp, rsp\n");
+        res.push_str(format!("\tsub rsp, {}\n", stack_size).as_str());
+    }
+
+    res.push_str("\t; TODO\n");
+
+    if stack_size > 0 {
+        res.push_str("\tmov rsp, rbp\n");
+    }
+    res.push_str("\tpop rbp\n");
+    res.push_str("\tret\n");
+    return Ok(res);
 }
 
 pub fn test(ast: &parser::Ast) {
@@ -437,31 +554,21 @@ pub fn test(ast: &parser::Ast) {
         _ => return,
     };
 
-    let mut main_func = Function {
-        name: String::from("main"),
-        statements: Vec::new(),
-    };
+    let context = build_compiler_context(children);
 
-    let mut extern_symbols = Vec::<FunctionDeclaration>::new();
-
-    let functions = match flatten_tree(&children, Scope::new_global_scope(), String::new(), &mut main_func.statements, &mut extern_symbols) {
-        Err(e) => panic!("{}", e),
-        Ok(f) => f,
-    };
-
-    for dec in extern_symbols {
+    for dec in context.extern_symbols {
         println!("extern: {}", dec.to_string());
     }
 
-    for f in functions {
-        println!("{}", f.name);
-        for child in f.statements {
-            println!("{:?}", child);
-        }
+    for f in context.functions {
+        match visit_function(&f) {
+            Err(e) => panic!("{}", e),
+            Ok(val) => println!("{}", val),
+        };
     }
 
-    println!("main function");
-    for child in main_func.statements {
-        println!("{:?}", child);
-    }
+    match visit_function(&context.main_function) {
+        Err(e) => panic!("{}", e),
+        Ok(val) => println!("{}", val),
+    };
 }

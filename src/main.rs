@@ -41,10 +41,6 @@ fn main() {
         Ok(tokens) => tokens,
     };
 
-    for token in &tokens {
-        println!("{}", token);
-    }
-
     let ast = match parser::load_ast(&tokens) {
         Err(e) => panic!("{}", e),
         Ok(ast) => ast,

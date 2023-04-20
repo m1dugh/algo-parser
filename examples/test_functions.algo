@@ -9,7 +9,8 @@ end
 declare function hello4(): int
 
 function hello2(test: int)
-    hello4()
+    value <- true
+    test <- hello4()
     function hello3(): int
     end
     test <- test + hello3()
