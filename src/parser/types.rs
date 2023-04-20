@@ -45,6 +45,11 @@ impl PartialEq<Variable> for Variable {
 #[derive(Clone)]
 pub enum Ast {
     Global(Vec<Ast>),
+    FunctionHeader{
+        name: String,
+        parameters: Vec<Variable>,
+        return_type: Option<String>,
+    },
     FunctionDeclaration{
         name: String,
         children: Vec<Ast>,
@@ -174,7 +179,8 @@ impl Debug for Ast {
             Self::ReturnStatement(ast) => write!(f, "<Return {:?} />", ast),
             Self::FunctionDeclaration { name, children, parameters, return_type } =>
                 write!(f, "<Function name={:?} parameters={:?} return_type={:?} children={:?} />", name, parameters, return_type, children),
-
+            Self::FunctionHeader { name, parameters, return_type } =>
+                write!(f, "<FunctionHeader name={:?} parameters={:?} return_type={:?} />", name, parameters, return_type),
             _ => todo!("ast fmt::Debug not implemented"),
         };
     }

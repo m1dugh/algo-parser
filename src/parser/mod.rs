@@ -271,6 +271,26 @@ fn build_return_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, Strin
     };
 }
 
+fn build_declaration_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+    let token = match tokens.next() {
+        None => return Err(format!("unexpected end of document after declare keyword")),
+        Some(val) => val,
+    };
+
+    return match token {
+        TokenType::Keyword(val) if val == "function" => build_function_declaration_ast(tokens),
+        val => Err(format!("unexpected token {}, after declare keyword", val)),
+    };
+}
+
+fn build_function_declaration_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
+    let (name, parameters, return_type) = match parse_function_header(tokens) {
+        Ok(v) => v,
+        Err(e) => return Err(e),
+    };
+    return Ok(Ast::FunctionHeader { name, parameters, return_type });
+}
+
 fn build_function_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, String> {
 
 
@@ -636,6 +656,10 @@ fn build_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Option<Result<Ast, Strin
             tokens.next();
             return Some(build_function_ast(tokens));
         },
+        TokenType::Keyword(val) if val == "declare" => {
+            tokens.next();
+            return Some(build_declaration_ast(tokens));
+        },
         TokenType::Keyword(val) if val == "while" => {
             tokens.next();
             return Some(build_while_loop_ast(tokens));
@@ -682,3 +706,13 @@ fn build_while_loop_ast(tokens: &mut Peekable<Iter<TokenType>>) -> Result<Ast, S
 
     return Ok(Ast::WhileLoop { condition, children });
 }
+
+pub trait Visitor<T> {
+    fn visit(&self, current: T, element: &Ast) -> Result<T, String>;
+    fn visit_global(&self, current: T, children: &Vec<Ast>) -> Result<T, String>;
+    fn visit_function(&self, current: T, name: &String, children: &Vec<Ast>, parameters: &Vec<Variable>, return_type: &Option<Type>) -> Result<T, String>;
+    fn visit_value(&self, current: T, value: &Ast) -> Result<T, String>;
+    fn visit_binary_operator(&self, current: T, value: &Ast) -> Result<T, String>;
+    fn visit_unary_operator(&self, current: T, value: &Ast) -> Result<T, String>;
+}
+

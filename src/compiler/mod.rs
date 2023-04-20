@@ -1,14 +1,8 @@
-use std::{rc::Rc, fmt::{Debug, Formatter, self}, cell::RefCell};
+use std::{fmt::{Debug, Formatter, self}, collections::HashMap};
 
 use super::parser;
 
-pub trait Visitor<T> {
-    fn visit(&self, element: &parser::Ast) -> T;
-}
-
-pub struct Compiler;
-
-#[derive(Clone)]
+#[derive(Clone, Hash, Eq)]
 pub struct Type {
     pub name: String,
     pub size: u64,
@@ -61,130 +55,66 @@ pub fn string_type() -> Type {
     };
 }
 
-pub fn void_type() -> Type {
-    return Type {
-        name: String::from("void"),
-        size: 0,
-    }
-}
-
 #[derive(Clone)]
-pub struct Scope {
-    variables: Vec<Variable>,
-    functions: Vec<Function>,
-    types: Vec<Type>,
-    parent: Option<Box<Scope>>,
-}
-
-impl Debug for Scope {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "Scope {{ types: {:?}, variables: {:?}, functions: {:?}, }}", self.types, self.variables, self.functions)
-    }
-}
-
-impl Scope {
-    fn new_global_scope() -> Self {
-        return Scope {
-            variables: Vec::new(),
-            types: vec![int_type(), float_type(), array_type(), string_type()],
-            functions: Vec::new(),
-            parent: None,
-        };
-    }
-
-    fn new() -> Self {
-        return Scope {
-            variables: Vec::new(),
-            types: Vec::new(),
-            functions: Vec::new(),
-            parent: None,
-        };
-    }
-}
-
-#[derive(Clone)]
-pub struct Variable {
+struct Variable {
     name: String,
     typeval: Type,
 }
 
-impl Debug for Variable {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "<Var {:?} type={:?} />", self.name, self.typeval)
+#[derive(Clone, Hash, Eq)]
+struct FunctionDeclaration {
+    name: String,
+    parameters: Vec<Type>,
+    return_type: Option<Type>,
+}
+
+struct Function {
+    name: String,
+    statements: Vec<parser::Ast>,
+}
+
+impl ToString for FunctionDeclaration {
+    fn to_string(&self) -> String {
+        let mut res = String::new();
+        res.push_str(self.name.as_str());
+        res.push('(');
+        if self.parameters.len() >= 1 {
+            let mut iter = self.parameters.iter();
+            res.push_str(iter.next().unwrap().name.as_str());
+            for val in iter {
+                res.push_str(format!(",{}", val.name).as_str());
+            }
+        }
+        res.push(')');
+        return res;
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Function {
-    pub name: String,
-    pub parameters: Vec<Variable>,
-    pub scope: Box<Scope>,
-    pub return_type: Option<Type>,
+impl PartialEq<FunctionDeclaration> for FunctionDeclaration {
+    fn eq(&self, other: &FunctionDeclaration) -> bool {
+        return self.name == other.name && self.parameters == other.parameters;
+    }
 }
 
-fn add_variable_to_scope(var: Variable, scope: Scope) -> Result<Scope, String> {
-    let mut scope = scope;
-    let exisiting_var = match scope.variables.iter().filter(|&v| v.name == var.name).next() {
-        Some(val) => val,
-        None => {
-            scope.variables.push(var);
-            return Ok(scope);
-        },
-    };
-
-    return match exisiting_var.typeval == var.typeval {
-        true => Ok(scope),
-        false => Err(format!("cannot change type of variable {:?} from {:?} to {:?}", &var.name, &exisiting_var.typeval, &var.typeval)),
-    };
+#[derive(Clone)]
+struct Scope {
+    functions: Vec<FunctionDeclaration>,
+    variables: Vec<Variable>,
+    types: Vec<Type>,
+    parent: Option<Box<Scope>>,
+    functions_symbol_table: HashMap<FunctionDeclaration, String>,
 }
 
-fn collect_symbols(statements: &Vec<parser::Ast>, scope: Scope) -> Result<Scope, String> {
-    let mut scope = scope;
-
-    for statement in statements {
-        match statement {
-            parser::Ast::Assignement { variable, expression } => {
-                let result: Variable;
-                let var = match &**variable {
-                    parser::Ast::Variable(var) => var,
-                    val => return Err(format!("expected variable, instead go {:?}", val)),
-                };
-                
-                let expression_type = match calculate_expression_type(expression, &scope) {
-                    Ok(val) => val,
-                    Err(e) => return Err(e),
-                };
-
-                if let Some(typename) = &var.typename {
-                    if typename.name != expression_type.name {
-                        return Err(format!("mismatching types for variable '{}', variable is of type '{}', and expression of type '{}'", var.name, typename.name, expression_type.name));
-                    }
-                    result = Variable {
-                        name: var.name.clone(),
-                        typeval: expression_type,
-                    };
-                } else {
-                    result = Variable {
-                        name: var.name.clone(),
-                        typeval: expression_type,
-                    };
-                }
-                scope = match add_variable_to_scope(result, scope) {
-                    Ok(scope) => scope,
-                    Err(e) => return Err(e),
-                };
-            },
-            parser::Ast::FunctionDeclaration {..}
-            => {
-                scope.functions.push(match create_function(statement, Box::new(scope.clone())) {
-                    Ok(f) => f,
-                    Err(e) => return Err(e),
-                });
-            },
-            _ => (),
+impl Scope {
+    fn new(parent: Option<Box<Scope>>) -> Self {
+        return Scope {
+            functions: Vec::new(),
+            variables: Vec::new(),
+            types: Vec::new(),
+            parent,
+            functions_symbol_table: HashMap::<FunctionDeclaration, String>::new(),
         };
     }
-    return Ok(scope);
 }
 
 fn get_variable_type(name: &str, scope: &Scope) -> Result<Type, String> {
@@ -195,21 +125,32 @@ fn get_variable_type(name: &str, scope: &Scope) -> Result<Type, String> {
     };
 }
 
+fn function_exists(name: &str, param_types: &Vec<Type>, declarations: &Vec<FunctionDeclaration>) -> Option<FunctionDeclaration> {
 
-fn get_function_return_type(name: &str, scope: &Scope) -> Result<Type, String> {
-    if let Some(func) = scope.functions.iter().filter(|&f| f.name == name).next() {
-        return Ok(match func.return_type.clone() {
-            Some(t) => t,
-            None => void_type(),
-        });
+    for dec in declarations {
+        if dec.name != name {
+            continue;
+        }
+        if param_types == &dec.parameters {
+            return Some(dec.clone());
+        }
+    }
+
+    return None;
+}
+
+fn get_function_return_type(name: &str, param_types: &Vec<Type>, scope: &Scope) -> Result<Option<Type>, String> {
+
+    if let Some(func) = function_exists(name, param_types, &scope.functions) {
+        return Ok(func.return_type.clone());
     } else if let Some(parent_scope) = scope.parent.clone() {
-        return get_function_return_type(name, &parent_scope);
+        return get_function_return_type(name, param_types, &parent_scope);
     } else {
-        return Err(format!("compiler: undefined function '{}'", name));
+        return Err(format!("no function with the following signature: {}({:?})", name, param_types));
     }
 }
 
-pub fn calculate_expression_type(expression: &parser::Ast, scope: &Scope) -> Result<Type, String> {
+fn calculate_expression_type(expression: &parser::Ast, scope: &Scope) -> Result<Type, String> {
 
     return match expression {
         parser::Ast::Int(..) => Ok(int_type()),
@@ -252,17 +193,24 @@ pub fn calculate_expression_type(expression: &parser::Ast, scope: &Scope) -> Res
             }
         },
         parser::Ast::Variable(var) => get_variable_type(&var.name, &scope),
-        parser::Ast::FunctionCall { name, .. } => get_function_return_type(name, &scope),
+        parser::Ast::FunctionCall { name, children } => {
+            let mut types = Vec::<Type>::new();
+            for child in children {
+                types.push(match calculate_expression_type(child, &scope) {
+                    Ok(val) => val,
+                    Err(e) => return Err(e),
+                });
+            }
+            match get_function_return_type(name, &types, scope) {
+                Err(e) => return Err(e),
+                Ok(val) => match val {
+                    None => return Err(format!("function with void return type cannot be used as an expression.")),
+                    Some(val) => Ok(val),
+                },
+            }
+        },
         _ => todo!(),
     };
-}
-
-fn collect_function_symbols(parameters: &Vec<Variable>, statements: &Vec<parser::Ast>, scope: Scope) -> Result<Scope, String> {
-    let mut scope = scope;
-    for param in parameters {
-        scope.variables.push(param.clone());
-    }
-    return collect_symbols(statements, scope);
 }
 
 fn get_type(typename: String, scope: &Scope) -> Result<Type, String> {
@@ -275,8 +223,8 @@ fn get_type(typename: String, scope: &Scope) -> Result<Type, String> {
     }
 }
 
-fn convert_params(parser_params: &Vec<parser::Variable>, scope: &Scope) -> Result<Vec<Variable>, String> {
-    let mut result = Vec::<Variable>::new();
+fn convert_params(parser_params: &Vec<parser::Variable>, scope: &Scope) -> Result<Vec<Type>, String> {
+    let mut result = Vec::<Type>::new();
     for param in parser_params {
         let parser_type = param.typename.clone().unwrap();
         let typeval = match get_type(parser_type.name.clone(), &scope) {
@@ -284,62 +232,110 @@ fn convert_params(parser_params: &Vec<parser::Variable>, scope: &Scope) -> Resul
             Err(e) => return Err(e),
         };
 
-        result.push(Variable { name: param.name.clone(), typeval });
+        result.push(typeval);
     }
     return Ok(result);
 }
 
-fn create_function(ast: &parser::Ast, parent_scope: Box<Scope>) -> Result<Function, String> {
-    let (
-        name,
-        parser_children,
-        parser_params,
-        return_type_opt,
-    ) = match ast {
-        parser::Ast::FunctionDeclaration { name, children, parameters, return_type }
-        => (name, children, parameters, return_type),
-        _ => return Err(format!("unexpected token type {:?}, expected function declaration", ast)),
-    };
+fn create_function_header(name: &String, parser_params: &Vec<parser::Variable>, return_type_opt: &Option<String>, parent_scope: &Scope) -> Result<FunctionDeclaration, String> {
 
-    let mut scope = Scope::new();
-    scope.parent = Some(parent_scope.clone());
-
-    let parameters = match convert_params(parser_params, parent_scope.as_ref()) {
+    let parameters = match convert_params(&parser_params, &parent_scope) {
         Ok(children) => children,
         Err(e) => return Err(e),
     };
 
-    let scope = match collect_function_symbols(&parameters, &parser_children, scope) {
-        Err(e) => return Err(e),
-        Ok(f) => f,
-    };
-
     let return_type = match return_type_opt {
-        Some(val) => Some(match get_type(val.clone(), &scope) {
+        Some(val) => Some(match get_type(val.clone(), &parent_scope) {
             Err(e) => return Err(e),
             Ok(typeval) => typeval,
         }),
         None => None,
     };
-    return Ok(Function { name: name.clone(), parameters, scope: Box::new(scope), return_type });
+
+    return Ok(FunctionDeclaration {
+        name: name.clone(),
+        parameters,
+        return_type,
+    });
+
 }
 
-impl Visitor<String> for Compiler {
-    fn visit(&self, element: &parser::Ast) -> String {
-        return String::new();
+fn build_function_name(scope_name: String, declaration: &FunctionDeclaration) -> String {
+    return format!("{}_{}", scope_name, declaration.to_string());
+}
+
+fn flatten_tree(children: &Vec<parser::Ast>, scope: Scope, scope_name: String, func_impl: &mut Vec<parser::Ast>) -> Result<Vec<Function>, String> {
+    let mut children_functions = Vec::<Function>::new();
+    let mut scope = scope;
+    for child in children {
+        match child {
+            parser::Ast::FunctionDeclaration { name, children, parameters, return_type }
+            => {
+                let parameters = match convert_params(parameters, &scope) {
+                    Ok(val) => val,
+                    Err(e) => return Err(e),
+                };
+                let return_type = match get_function_return_type(name, &parameters, &scope) {
+                    Err(e) => return Err(e),
+                    Ok(val) => val,
+                };
+                let dec = FunctionDeclaration {
+                    name: name.clone(),
+                    parameters,
+                    return_type,
+                };
+                scope.functions.push(dec.clone());
+                let function_name = build_function_name(scope_name.clone(), &dec);
+                scope.functions_symbol_table.insert(dec.clone(), function_name.clone());
+                let sub_scope = Scope::new(Some(Box::new(scope.clone())));
+                let mut statements = Vec::<parser::Ast>::new();
+                let sub_functions = match flatten_tree(children, sub_scope, format!("{}_{}", scope_name.clone(), name.clone()), &mut statements) {
+                    Err(e) => return Err(e),
+                    Ok(val) => val,
+                };
+                for f in sub_functions {
+                    children_functions.push(f);
+                }
+                children_functions.push(Function {
+                    name: function_name.clone(),
+                    statements,
+                });
+            },
+            parser::Ast::FunctionCall { name, children } => {
+                let mut types = Vec::<Type>::new();
+                for child in children {
+                    types.push(match calculate_expression_type(child, &scope) {
+                        Err(e) => return Err(e),
+                        Ok(val) => val,
+                    });
+                }
+
+                let dec = match function_exists(name.as_str(), &types, &scope.functions) {
+                    None => return Err(format!("undefined function {}", name)),
+                    Some(val) => val,
+                };
+
+                let effective_name = match scope.functions_symbol_table.get(&dec) {
+                    None => return Err(format!("undefined symbol {}", dec.to_string())),
+                    Some(val) => val,
+                };
+
+                func_impl.push(parser::Ast::FunctionCall { 
+                    name: effective_name.clone(),
+                    children: children.clone(), 
+                });
+            },
+            child => func_impl.push(child.clone()),
+        }
+
     }
+    return Ok(children_functions);
 }
 
 pub fn test(ast: &parser::Ast) {
-    let statements = match ast {
+    let children = match ast {
         parser::Ast::Global(children) => children,
         _ => return,
     };
 
-    let scope = match collect_symbols(&statements, Scope::new_global_scope()) {
-        Err(e) => panic!("{}", e),
-        Ok(scope) => scope,
-    };
-
-    println!("{:?}", scope);
 }
